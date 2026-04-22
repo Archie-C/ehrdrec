@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ehrdrec"
+version = "0.1.0"
+description = "A unified framework for ehr-based drug recommendation"
+readme = "README.md"
+authors = [{name = "Archie Carpenter", email = "archie_l_carpenter@hotmail.com"}]
+requires-python = ">=3.12"
+
+# These are the libraries people get when they 'pip install' your package
+dependencies = [
+]
+
+# Classification helps people find your package by category
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]

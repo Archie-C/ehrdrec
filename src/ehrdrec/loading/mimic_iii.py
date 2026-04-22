@@ -1,4 +1,5 @@
 import pandas as pd
+from pathlib import Path
 
 from ehrdrec.loading.base import BaseLoader
 from ehrdrec.models.base import ExtendedMedication
@@ -6,10 +7,11 @@ from ehrdrec.models.data_loading import LoadedData, LoadedDataRow
 
 class MIMIC3Loader(BaseLoader):
     def load(self, source: str):
-        admissions = pd.read_csv(source / "ADMISSIONS.csv", parse_dates=["ADMITTIME", "DISCHTIME"])
-        diagnoses  = pd.read_csv(source / "DIAGNOSES_ICD.csv", dtype=str)
-        procedures = pd.read_csv(source / "PROCEDURES_ICD.csv", dtype=str)
-        prescriptions = pd.read_csv(source / "PRESCRIPTIONS.csv", dtype=str)
+        source_path = Path(source)
+        admissions = pd.read_csv(source_path / "ADMISSIONS.csv", parse_dates=["ADMITTIME", "DISCHTIME"])
+        diagnoses  = pd.read_csv(source_path / "DIAGNOSES_ICD.csv", dtype=str)
+        procedures = pd.read_csv(source_path / "PROCEDURES_ICD.csv", dtype=str)
+        prescriptions = pd.read_csv(source_path / "PRESCRIPTIONS.csv", dtype=str)
         
         diag_grouped = (
             diagnoses.groupby("HADM_ID")["ICD9_CODE"]
@@ -37,7 +39,7 @@ class MIMIC3Loader(BaseLoader):
     def _build_medications(self, prescriptions: pd.DataFrame) -> list[ExtendedMedication]:
         meds = []
         for _, rx in prescriptions.iterrows():
-            drug_id = rx.get("DRUG_NAME_GENERIC") or rx.get("DRUG") or "UNKNOWN"
+            drug_id = rx.get("NDC")
             meds.append(ExtendedMedication(
                 id=str(drug_id).strip(),
                 name=str(rx.get("DRUG", "")).strip(),

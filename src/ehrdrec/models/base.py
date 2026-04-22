@@ -5,4 +5,5 @@ class Medication(BaseModel):
     
 class ExtendedMedication(Medication):
     name: str
-    dosage: str
+    dosage_value: str
+    doseage_unit: str

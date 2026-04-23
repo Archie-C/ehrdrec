@@ -15,7 +15,7 @@ class LoadedData:
     discharge_time  : Utf8   (ISO-8601, "" when null)
     diagnoses       : List[Utf8]
     procedures      : List[Utf8]
-    medications     : List[Struct{ id, name, dosage_value, dosage_unit }]
+    medications     : List[Struct{ NDC, name, dosage_value, dosage_unit }]
     """
     data_source: str
     dataset_name: str

@@ -99,7 +99,7 @@ class MIMIC3Loader(BaseLoader):
             .group_by("HADM_ID")
             .agg(
                 pl.struct(
-                    pl.col("id"),
+                    pl.col("NDC"),
                     pl.col("name"),
                     pl.col("dosage_value"),
                     pl.col("dosage_unit"),
@@ -197,13 +197,13 @@ class MIMIC3Loader(BaseLoader):
                 null_values=[""],
             )
             .rename({
-                "NDC":          "id",
+                "NDC":          "NDC",
                 "DRUG":         "name",
                 "DOSE_VAL_RX":  "dosage_value",
                 "DOSE_UNIT_RX": "dosage_unit",
             })
             .with_columns([
-                pl.col("id").str.strip_chars().fill_null(""),
+                pl.col("NDC").str.strip_chars().fill_null(""),
                 pl.col("name").str.strip_chars().fill_null(""),
                 pl.col("dosage_value").str.strip_chars().fill_null(""),
                 pl.col("dosage_unit").str.strip_chars().fill_null(""),

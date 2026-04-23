@@ -1,7 +1,6 @@
 import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
  
 import polars as pl

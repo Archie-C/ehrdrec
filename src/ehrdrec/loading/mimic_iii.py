@@ -50,7 +50,7 @@ class MIMIC3Loader(BaseLoader):
 
     def _cache_path(self, source_path: Path) -> Path:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        return self.cache_dir / f"mimic3_{self._cache_key(source_path)}.joblib"
+        return self.cache_dir / f"mimic3_{self._cache_key(source_path)}.parquet"
 
     def _cache_key(self, source_path: Path) -> str:
         """Key based on source file mtimes — invalidates if files change.
@@ -180,7 +180,7 @@ class MIMIC3Loader(BaseLoader):
             )
             .drop_nulls("ICD9_CODE")
         )
- 
+    
     @staticmethod
     def _read_prescriptions(source_path: Path) -> pl.DataFrame:
         return (
@@ -197,13 +197,12 @@ class MIMIC3Loader(BaseLoader):
                 null_values=[""],
             )
             .rename({
-                "NDC":          "NDC",
                 "DRUG":         "name",
                 "DOSE_VAL_RX":  "dosage_value",
                 "DOSE_UNIT_RX": "dosage_unit",
             })
             .with_columns([
-                pl.col("NDC").str.strip_chars().fill_null(""),
+                pl.col("NDC").str.strip_chars(),
                 pl.col("name").str.strip_chars().fill_null(""),
                 pl.col("dosage_value").str.strip_chars().fill_null(""),
                 pl.col("dosage_unit").str.strip_chars().fill_null(""),

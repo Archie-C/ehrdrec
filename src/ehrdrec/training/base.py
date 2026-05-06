@@ -26,8 +26,8 @@ class BaseTrainer(ABC):
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.metrics = metrics or []
-        self.device = torch.device(self.device)
         self.epochs = epochs
+        self.model = model.to(self.device)
 
     @abstractmethod
     def fit(self) -> TrainingResults:

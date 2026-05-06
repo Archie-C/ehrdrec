@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from ehrdrec.models import TrainingResults
+from ehrdrec.models.dataclasses import TrainingResults
 from ehrdrec.training import BaseTrainer
 
 class Trainer(BaseTrainer):

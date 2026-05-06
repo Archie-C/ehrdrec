@@ -6,8 +6,8 @@ from pathlib import Path
 import polars as pl
 from platformdirs import user_cache_dir
 
-from ehrdrec.models.data_loading import LoadedData
-from ehrdrec.models.data_processing import ProcessedDataMultiHot
+from ehrdrec.models.dataclasses.data_loading import LoadedData
+from ehrdrec.models.dataclasses.data_processing import ProcessedDataMultiHot
 from ehrdrec.processing.base import BaseProcessor
 from ehrdrec.mappings import NDCATCMapper, Vocab
 

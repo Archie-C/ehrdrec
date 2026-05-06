@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
+from ehrdrec.models import TrainingResults
+
 
 class BaseTrainer(ABC):
     def __init__(
@@ -18,15 +20,15 @@ class BaseTrainer(ABC):
         device: str | torch.device = "cuda",
         epochs: int = 10,
     ):
-        self.model = model.to(device)
+        self.device = torch.device(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.metrics = metrics or []
-        self.device = torch.device(device)
+        self.device = torch.device(self.device)
         self.epochs = epochs
 
     @abstractmethod
-    def fit(self):
+    def fit(self) -> TrainingResults:
         pass

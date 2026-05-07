@@ -10,7 +10,7 @@ if __name__ == "__main__":
     loader = MIMIC3Loader()
     data = loader.load("/home/cararc/data/mimic-iii-1.4")
     processor = MultiHotProcessor()
-    processed_data = processor.process(data, minimum_admissions=2)
+    processed_data = processor.process(data, minimum_admissions=2, atc_level=3)
     print("Train data:")
     print(processed_data.train_frame.collect().head())
     print("Validation data:")

@@ -23,6 +23,7 @@ if __name__ == "__main__":
     x, y = train_dataset[0]
     output_size = y.shape[0]
     input_size = x.shape[0]
+    print(f"Input size: {input_size}, Output size: {output_size}")
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)

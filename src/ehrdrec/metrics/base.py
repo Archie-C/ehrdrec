@@ -11,3 +11,7 @@ class Metric(ABC):
     @abstractmethod
     def compute(self):
         raise NotImplementedError("Subclasses must implement compute method")
+    
+    @abstractmethod
+    def reset(self):
+        raise NotImplementedError("Subclasses must implement reset method")

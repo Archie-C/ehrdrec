@@ -42,6 +42,7 @@ class MultiHotProcessor(BaseProcessor):
         mapping_file: str = "data/mappings/ndc_atc_mapping.sqlite",
         include_reserved: bool = True,
         force_reload: bool = False,
+        atc_level: int | None = None,
     ) -> ProcessedDataMultiHot:
 
         cache_dir = self._cache_dir(
@@ -92,6 +93,7 @@ class MultiHotProcessor(BaseProcessor):
         df = self._convert_ndc_to_atc(
             df,
             mapping_file=mapping_file,
+            atc_level=atc_level,
         )
 
         train_data, val_data, test_data = self._split(
@@ -294,6 +296,7 @@ class MultiHotProcessor(BaseProcessor):
         self,
         data: pl.LazyFrame,
         mapping_file: str,
+        atc_level: int | None = None,
     ) -> pl.LazyFrame:
         mapper = NDCATCMapper.from_file(mapping_file)
 
@@ -303,7 +306,7 @@ class MultiHotProcessor(BaseProcessor):
             if ndc in ndc_cache:
                 return ndc_cache[ndc]
 
-            mapped = mapper.ndc_to_atc(ndc)
+            mapped = mapper.ndc_to_atc(ndc, atc_level=atc_level)
 
             if not mapped or not mapped.atc_codes:
                 result = ["UNK"]

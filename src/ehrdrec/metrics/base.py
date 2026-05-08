@@ -5,7 +5,7 @@ class Metric(ABC):
         self.name = name
         
     @abstractmethod
-    def update(self, y_true, y_pred):
+    def update(self, outputs, targets):
         raise NotImplementedError("Subclasses must implement update method")
         
     @abstractmethod

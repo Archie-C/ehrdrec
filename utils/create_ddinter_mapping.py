@@ -16,7 +16,7 @@ files = [
     
 ]
 
-id_to_codes = pl.read_csv("ddinter_atc_codes.csv")
+id_to_codes = pl.read_csv("data/ddinter2/mapping/ddinter_atc_codes.csv")
 stacked = pl.DataFrame()
 
 for f in files:
@@ -61,28 +61,15 @@ for f in files:
 
     print(stacked.height)
 print(stacked.null_count())
-stacked.drop_nulls(subset=["ATC_A", "ATC_B"]).write_csv("ddinter_mapped_atc_codes_nonnull.csv")
-stacked.write_csv("ddinter_mapped_atc_codes.csv")
-
-null_a = (
+stacked = stacked.drop_nulls(subset=["ATC_A", "ATC_B"])
+ddi_lookup = (
     stacked
-    .filter(pl.col("ATC_A").is_null())
-    .select("DDInterID_A", "Drug_A")
-    .unique()
+    .with_columns([
+        pl.min_horizontal("ATC_A", "ATC_B").alias("ATC_A"),
+        pl.max_horizontal("ATC_A", "ATC_B").alias("ATC_B"),
+    ])
+    .unique(subset=["ATC_A", "ATC_B"])
+    .select(["ATC_A", "ATC_B", "Level"])
 )
-null_b = (
-    stacked
-    .filter(pl.col("ATC_B").is_null())
-    .select("DDInterID_B", "Drug_B")
-    .unique()
-)
+ddi_lookup.write_csv("data/ddinter2/mapping/ddinter_mapped_atc_codes.csv")
 
-combined = set(zip(null_a.get_column("DDInterID_A"), null_a.get_column("Drug_A"))) | set(zip(null_b.get_column("DDInterID_B"), null_b.get_column("Drug_B")))
-
-if not combined:
-    print("No unmapped IDs found.")
-else:
-    combined_list = sorted(combined, key=lambda x: (x[0] or "", x[1] or ""))
-    print(f"Found {len(combined_list)} unmapped ID(s):")
-    for ddid, drug in combined_list:
-        print(f"- {ddid}: {drug}")

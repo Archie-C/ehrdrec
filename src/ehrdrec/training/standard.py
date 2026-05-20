@@ -155,7 +155,7 @@ class Trainer(BaseTrainer):
         results = {}
 
         for metric in self.metrics:
-            name = metric.__class__.__name__
+            name = metric.name
             value = metric.compute()
 
             if isinstance(value, torch.Tensor):

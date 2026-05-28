@@ -7,7 +7,7 @@ from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
 from ehrdrec.processing import MultiHotProcessor
 from ehrdrec.training import Trainer
-from ehrdrec.models import MLP
+from ehrdrec.models import FourSDrug
 import torch
 
 from torch.utils.data import DataLoader
@@ -24,6 +24,8 @@ if __name__ == "__main__":
     processed_data = processor.process(data, minimum_admissions=2, atc_level=ATC_LEVEL, force_reload=True)
     medications_vocab = processor.medications_vocab
     
+    print(processed_data.train_frame.columns)
+    
     train_dataset = MultiHotDataset(processed_data.train_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
     val_dataset = MultiHotDataset(processed_data.val_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
     test_dataset = MultiHotDataset(processed_data.test_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
@@ -34,7 +36,11 @@ if __name__ == "__main__":
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    model = MLP(input_size=input_size, hidden_sizes=[512, 256], output_size=output_size)
+    model = FourSDrug(
+        num_symptoms=input_size,
+        num_drugs=output_size,
+        emb_dim=128,
+    )
     
     loss_fn = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

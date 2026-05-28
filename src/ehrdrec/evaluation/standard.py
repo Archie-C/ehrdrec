@@ -24,7 +24,11 @@ class Evaluator(BaseEvaluator):
         with torch.no_grad():
             for batch in self.test_loader:
                 inputs, targets = batch
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
+                if isinstance(inputs, dict):
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                else:
+                    inputs = inputs.to(self.device)
+                targets = targets.to(self.device)
 
                 outputs = self.model(inputs)
                 for metric in self.metrics:

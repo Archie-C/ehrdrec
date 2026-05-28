@@ -5,22 +5,25 @@ from ehrdrec.utils.constants import ReservedId
 # TODO: Remove UNK when scoring
 class Jaccard(Metric):
     def __init__(
-        self, 
-        name: str = "Jaccard", 
+        self,
+        name: str = "Jaccard",
         threshold: float = 0.5,
         ignore_indices: list[int] | None = None,
+        from_logits: bool = True,
     ):
         super().__init__(name)
         self.threshold = threshold
+        self.from_logits = from_logits
         self.ignore_indices = ignore_indices if ignore_indices is not None else [ReservedId.UNK, ReservedId.PAD]
         self.intersection = 0
         self.union = 0
 
     def update(self, outputs: torch.Tensor, targets: torch.Tensor) -> None:
-        preds = (outputs >= self.threshold).float()
-        
+        x = outputs.sigmoid() if self.from_logits else outputs
+        preds = (x >= self.threshold).float()
+
         if self.ignore_indices:
-            keep_mask = torch.ones(outputs.shape[-1], dtype=torch.bool, device=outputs.device)
+            keep_mask = torch.ones(x.shape[-1], dtype=torch.bool, device=x.device)
             keep_mask[self.ignore_indices] = False
 
             preds = preds[..., keep_mask]

@@ -83,7 +83,10 @@ class Trainer(BaseTrainer):
         self._reset_metrics()
 
         for features, targets in self.train_loader:
-            features = features.to(self.device)
+            if isinstance(features, dict):
+                features = {k: v.to(self.device) for k, v in features.items()}
+            else:
+                features = features.to(self.device)
             targets = targets.to(self.device)
 
             self.optimizer.zero_grad(set_to_none=True)
@@ -94,7 +97,7 @@ class Trainer(BaseTrainer):
             loss.backward()
             self.optimizer.step()
 
-            batch_size = features.size(0)
+            batch_size = next(iter(features.values())).size(0) if isinstance(features, dict) else features.size(0)
             total_loss += loss.item() * batch_size
             total_samples += batch_size
 
@@ -118,13 +121,16 @@ class Trainer(BaseTrainer):
 
         with torch.no_grad():
             for features, targets in self.val_loader:
-                features = features.to(self.device)
+                if isinstance(features, dict):
+                    features = {k: v.to(self.device) for k, v in features.items()}
+                else:
+                    features = features.to(self.device)
                 targets = targets.to(self.device)
 
                 outputs = self.model(features)
                 loss = self.loss_fn(outputs, targets)
 
-                batch_size = features.size(0)
+                batch_size = next(iter(features.values())).size(0) if isinstance(features, dict) else features.size(0)
                 total_loss += loss.item() * batch_size
                 total_samples += batch_size
 

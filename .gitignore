@@ -207,5 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 testing.py
-data/
+data/mappings/
 .vscode/
+ddinter_mapped_atc_codes.csv

@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 class FourSDrug(nn.Module):
     def __init__(self, num_symptoms, num_drugs, emb_dim=64):

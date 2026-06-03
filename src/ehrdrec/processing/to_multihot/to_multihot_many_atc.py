@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-class MultiHotProcessor(BaseProcessor):
+class MultiHotProcessorAllATCs(BaseProcessor):
 
-    PROCESSOR_VERSION = 1
+    PROCESSOR_VERSION = 3
 
     def __init__(self, cache_dir: Path | None = None):
         super().__init__()
@@ -29,7 +29,16 @@ class MultiHotProcessor(BaseProcessor):
 
         self.diagnoses_vocab = None
         self.procedures_vocab = None
+
+        # Backwards-compatible name. This points to ATC5.
         self.medications_vocab = None
+
+        # ATC hierarchy vocabs.
+        self.atc1_vocab = None
+        self.atc2_vocab = None
+        self.atc3_vocab = None
+        self.atc4_vocab = None
+        self.atc5_vocab = None
 
         logger.debug("Initialised; vocab attributes set to None")
 
@@ -42,7 +51,7 @@ class MultiHotProcessor(BaseProcessor):
         mapping_file: str = "data/mappings/ndc_atc_mapping.sqlite",
         include_reserved: bool = True,
         force_reload: bool = False,
-        atc_level: int | None = None,
+        atc_level: int | None = 5,
     ) -> ProcessedDataMultiHot:
 
         cache_dir = self._cache_dir(
@@ -51,6 +60,7 @@ class MultiHotProcessor(BaseProcessor):
             split_frac=split_frac,
             mapping_file=mapping_file,
             include_reserved=include_reserved,
+            atc_level=atc_level,
         )
 
         if not force_reload and self._cache_exists(cache_dir):
@@ -75,12 +85,13 @@ class MultiHotProcessor(BaseProcessor):
 
         logger.info(
             "Processing started [source=%r, dataset=%r, minimum_admissions=%d, "
-            "split_frac=(%.2f, %.2f, %.2f), include_reserved=%s]",
+            "split_frac=(%.2f, %.2f, %.2f), include_reserved=%s, atc_level=%s]",
             data.data_source,
             data.dataset_name,
             minimum_admissions,
             *split_frac,
             include_reserved,
+            atc_level,
         )
 
         df = data.frame
@@ -90,14 +101,18 @@ class MultiHotProcessor(BaseProcessor):
             minimum_admissions=minimum_admissions,
         )
 
+        # Convert medication NDCs to ATC codes. For ATC hierarchy training,
+        # keep this at level 5 so all parent levels can be derived by slicing.
         df = self._convert_ndc_to_atc(
             df,
             mapping_file=mapping_file,
             atc_level=atc_level,
         )
-        
-        # The choice is to create the mappings before the split.
-        # This means there may be leakage but also means we won't have unseen codes in val/test which would be a problem for inference.
+
+        df = self._add_atc_level_columns(df)
+
+        # The choice is to create mappings before the split.
+        # This means there may be leakage, but avoids unseen codes in val/test.
         self._create_mappings(df)
 
         train_data, val_data, test_data = self._split(
@@ -106,8 +121,6 @@ class MultiHotProcessor(BaseProcessor):
             val_frac=split_frac[1],
             test_frac=split_frac[2],
         )
-
-        # self._create_mappings(train_data)
 
         train_data = self._convert_codes_to_integers(train_data)
         val_data = self._convert_codes_to_integers(val_data)
@@ -151,6 +164,7 @@ class MultiHotProcessor(BaseProcessor):
         split_frac: tuple[float, float, float],
         mapping_file: str,
         include_reserved: bool,
+        atc_level: int | None,
     ) -> Path:
         key = self._cache_key(
             data=data,
@@ -158,6 +172,7 @@ class MultiHotProcessor(BaseProcessor):
             split_frac=split_frac,
             mapping_file=mapping_file,
             include_reserved=include_reserved,
+            atc_level=atc_level,
         )
         return self.cache_dir / f"multi_hot_{key}"
 
@@ -169,6 +184,7 @@ class MultiHotProcessor(BaseProcessor):
         split_frac: tuple[float, float, float],
         mapping_file: str,
         include_reserved: bool,
+        atc_level: int | None,
     ) -> str:
         mapping_path = Path(mapping_file)
 
@@ -180,6 +196,7 @@ class MultiHotProcessor(BaseProcessor):
             "minimum_admissions": minimum_admissions,
             "split_frac": list(split_frac),
             "include_reserved": include_reserved,
+            "atc_level": atc_level,
             "mapping_file": str(mapping_path.resolve())
             if mapping_path.exists()
             else str(mapping_file),
@@ -203,6 +220,11 @@ class MultiHotProcessor(BaseProcessor):
             "diagnoses_vocab.json",
             "procedures_vocab.json",
             "medications_vocab.json",
+            "atc1_vocab.json",
+            "atc2_vocab.json",
+            "atc3_vocab.json",
+            "atc4_vocab.json",
+            "atc5_vocab.json",
             "meta.json",
         ]
         return cache_dir.exists() and all((cache_dir / f).exists() for f in required)
@@ -237,6 +259,17 @@ class MultiHotProcessor(BaseProcessor):
         meta = {
             "processor": "multi_hot",
             "processor_version": self.PROCESSOR_VERSION,
+            "medications_vocab_alias": "atc5_vocab",
+            "output_columns": [
+                "diagnosis_multihot",
+                "procedure_multihot",
+                "atc1_multihot",
+                "atc2_multihot",
+                "atc3_multihot",
+                "atc4_multihot",
+                "atc5_multihot",
+                "medication_multihot",
+            ],
         }
 
         (cache_dir / "meta.json").write_text(
@@ -247,12 +280,28 @@ class MultiHotProcessor(BaseProcessor):
     def _save_vocabs(self, cache_dir: Path) -> None:
         self._save_vocab(cache_dir / "diagnoses_vocab.json", self.diagnoses_vocab)
         self._save_vocab(cache_dir / "procedures_vocab.json", self.procedures_vocab)
-        self._save_vocab(cache_dir / "medications_vocab.json", self.medications_vocab)
+
+        self._save_vocab(cache_dir / "atc1_vocab.json", self.atc1_vocab)
+        self._save_vocab(cache_dir / "atc2_vocab.json", self.atc2_vocab)
+        self._save_vocab(cache_dir / "atc3_vocab.json", self.atc3_vocab)
+        self._save_vocab(cache_dir / "atc4_vocab.json", self.atc4_vocab)
+        self._save_vocab(cache_dir / "atc5_vocab.json", self.atc5_vocab)
+
+        # Backwards-compatible alias.
+        self._save_vocab(cache_dir / "medications_vocab.json", self.atc5_vocab)
 
     def _load_vocabs(self, cache_dir: Path) -> None:
         self.diagnoses_vocab = self._load_vocab(cache_dir / "diagnoses_vocab.json")
         self.procedures_vocab = self._load_vocab(cache_dir / "procedures_vocab.json")
-        self.medications_vocab = self._load_vocab(cache_dir / "medications_vocab.json")
+
+        self.atc1_vocab = self._load_vocab(cache_dir / "atc1_vocab.json")
+        self.atc2_vocab = self._load_vocab(cache_dir / "atc2_vocab.json")
+        self.atc3_vocab = self._load_vocab(cache_dir / "atc3_vocab.json")
+        self.atc4_vocab = self._load_vocab(cache_dir / "atc4_vocab.json")
+        self.atc5_vocab = self._load_vocab(cache_dir / "atc5_vocab.json")
+
+        # Backwards-compatible alias.
+        self.medications_vocab = self.atc5_vocab
 
     @staticmethod
     def _save_vocab(path: Path, vocab: Vocab) -> None:
@@ -300,7 +349,7 @@ class MultiHotProcessor(BaseProcessor):
         self,
         data: pl.LazyFrame,
         mapping_file: str,
-        atc_level: int | None = None,
+        atc_level: int | None = 5,
     ) -> pl.LazyFrame:
         mapper = NDCATCMapper.from_file(mapping_file)
 
@@ -347,16 +396,109 @@ class MultiHotProcessor(BaseProcessor):
             .alias("atc_codes")
         )
 
+    def _add_atc_level_columns(self, data: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Derives ATC1-ATC5 code lists from ATC5 codes.
+
+        ATC levels:
+            ATC1: A
+            ATC2: A10
+            ATC3: A10B
+            ATC4: A10BA
+            ATC5: A10BA02
+        """
+
+        def level_codes(codes, level: int) -> list[str]:
+            if codes is None:
+                return ["UNK"]
+
+            codes = codes.to_list() if hasattr(codes, "to_list") else list(codes)
+
+            out: list[str] = []
+
+            for code in codes:
+                if code is None:
+                    continue
+
+                code = str(code).strip()
+
+                if not code or code == "UNK":
+                    out.append("UNK")
+                    continue
+
+                if level == 1:
+                    out.append(code[:1])
+                elif level == 2:
+                    out.append(code[:3])
+                elif level == 3:
+                    out.append(code[:4])
+                elif level == 4:
+                    out.append(code[:5])
+                elif level == 5:
+                    out.append(code[:7])
+                else:
+                    raise ValueError("ATC level must be 1, 2, 3, 4, or 5.")
+
+            return list(dict.fromkeys(out)) or ["UNK"]
+
+        return data.with_columns(
+            [
+                pl.col("atc_codes")
+                .map_elements(
+                    lambda codes: level_codes(codes, 1),
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("atc1_codes"),
+                pl.col("atc_codes")
+                .map_elements(
+                    lambda codes: level_codes(codes, 2),
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("atc2_codes"),
+                pl.col("atc_codes")
+                .map_elements(
+                    lambda codes: level_codes(codes, 3),
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("atc3_codes"),
+                pl.col("atc_codes")
+                .map_elements(
+                    lambda codes: level_codes(codes, 4),
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("atc4_codes"),
+                pl.col("atc_codes")
+                .map_elements(
+                    lambda codes: level_codes(codes, 5),
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("atc5_codes"),
+            ]
+        )
+
     def _create_mappings(self, train_data: pl.LazyFrame) -> None:
         self.diagnoses_vocab = Vocab.from_lazyframe(train_data, col="diagnoses")
         self.procedures_vocab = Vocab.from_lazyframe(train_data, col="procedures")
-        self.medications_vocab = Vocab.from_lazyframe(train_data, col="atc_codes")
+
+        self.atc1_vocab = Vocab.from_lazyframe(train_data, col="atc1_codes")
+        self.atc2_vocab = Vocab.from_lazyframe(train_data, col="atc2_codes")
+        self.atc3_vocab = Vocab.from_lazyframe(train_data, col="atc3_codes")
+        self.atc4_vocab = Vocab.from_lazyframe(train_data, col="atc4_codes")
+        self.atc5_vocab = Vocab.from_lazyframe(train_data, col="atc5_codes")
+
+        # Backwards-compatible alias.
+        self.medications_vocab = self.atc5_vocab
 
         logger.info(
-            "Vocabularies built [diagnoses=%d, procedures=%d, medications=%d]",
+            "Vocabularies built [diagnoses=%d, procedures=%d, "
+            "atc1=%d, atc2=%d, atc3=%d, atc4=%d, atc5=%d]",
             len(self.diagnoses_vocab.id_to_token),
             len(self.procedures_vocab.id_to_token),
-            len(self.medications_vocab.id_to_token),
+            len(self.atc1_vocab.id_to_token),
+            len(self.atc2_vocab.id_to_token),
+            len(self.atc3_vocab.id_to_token),
+            len(self.atc4_vocab.id_to_token),
+            len(self.atc5_vocab.id_to_token),
         )
 
     def _convert_codes_to_integers(self, data: pl.LazyFrame) -> pl.LazyFrame:
@@ -364,7 +506,11 @@ class MultiHotProcessor(BaseProcessor):
             [
                 self.diagnoses_vocab.encode_expr("diagnoses", "diagnosis_ids"),
                 self.procedures_vocab.encode_expr("procedures", "procedure_ids"),
-                self.medications_vocab.encode_expr("atc_codes", "atc_ids"),
+                self.atc1_vocab.encode_expr("atc1_codes", "atc1_ids"),
+                self.atc2_vocab.encode_expr("atc2_codes", "atc2_ids"),
+                self.atc3_vocab.encode_expr("atc3_codes", "atc3_ids"),
+                self.atc4_vocab.encode_expr("atc4_codes", "atc4_ids"),
+                self.atc5_vocab.encode_expr("atc5_codes", "atc5_ids"),
             ]
         )
 
@@ -385,8 +531,34 @@ class MultiHotProcessor(BaseProcessor):
                     "procedure_multihot",
                     include_reserved=include_reserved,
                 ),
-                self.medications_vocab.to_multihot_expr(
-                    "atc_ids",
+                self.atc1_vocab.to_multihot_expr(
+                    "atc1_ids",
+                    "atc1_multihot",
+                    include_reserved=include_reserved,
+                ),
+                self.atc2_vocab.to_multihot_expr(
+                    "atc2_ids",
+                    "atc2_multihot",
+                    include_reserved=include_reserved,
+                ),
+                self.atc3_vocab.to_multihot_expr(
+                    "atc3_ids",
+                    "atc3_multihot",
+                    include_reserved=include_reserved,
+                ),
+                self.atc4_vocab.to_multihot_expr(
+                    "atc4_ids",
+                    "atc4_multihot",
+                    include_reserved=include_reserved,
+                ),
+                self.atc5_vocab.to_multihot_expr(
+                    "atc5_ids",
+                    "atc5_multihot",
+                    include_reserved=include_reserved,
+                ),
+                # Backwards-compatible alias for existing datasets/trainers.
+                self.atc5_vocab.to_multihot_expr(
+                    "atc5_ids",
                     "medication_multihot",
                     include_reserved=include_reserved,
                 ),
@@ -398,9 +570,18 @@ class MultiHotProcessor(BaseProcessor):
                 "diagnoses",
                 "procedures",
                 "atc_codes",
+                "atc1_codes",
+                "atc2_codes",
+                "atc3_codes",
+                "atc4_codes",
+                "atc5_codes",
                 "diagnosis_ids",
                 "procedure_ids",
-                "atc_ids",
+                "atc1_ids",
+                "atc2_ids",
+                "atc3_ids",
+                "atc4_ids",
+                "atc5_ids",
                 "medications",
             ]
         )

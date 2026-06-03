@@ -8,12 +8,13 @@ from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
 from ehrdrec.processing import MultiHotProcessor
 from ehrdrec.training import Trainer, ConsoleLogger, CheckpointLogger, CompositeLogger
-from ehrdrec.models import GameNetFast
-from ehrdrec.training.losses import BCELoss
+from ehrdrec.models import FastRx
 from ehrdrec.models.utils import create_ehr_adjacency_matrix, create_ddi_adjacency_matrix
 import torch
 
 from torch.utils.data import DataLoader
+
+from ehrdrec.training.losses import BCELoss
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
 logging.basicConfig()
@@ -76,22 +77,21 @@ if __name__ == "__main__":
     print(f"EHR adjacency matrix shape: {ehr_adj_matrix.shape}")
     print(f"DDI adjacency matrix shape: {ddi_adj_matrix.shape}")
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
-    model = GameNetFast(
+    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=False, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False, collate_fn=collate_fn)
+    model = FastRx(
         n_diagnoses=diagnoses_vocab.id_to_token.__len__(),
         n_procedures=procedures_vocab.id_to_token.__len__(),
         n_medications=output_size,
         medication_adjacency_matrix=ehr_adj_matrix,
         ddi_adjacency_matrix=ddi_adj_matrix,
-        diagnoses_embedding_dim = 128,
-        procedures_embedding_dim = 128,
-        hidden_dim = 128,
-        query_dim = 128,
+        embedding_dim=256,
+        embedding_dim_fastformer=128,
+        dropout=0.5
     )
     
     loss_fn = BCELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     metrics = [
         Jaccard(), 
         F1(), 
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     
     loggers = [
         ConsoleLogger(),
-        CheckpointLogger(checkpoint_dir="gamenet_checkpoints", keep_last=True),
+        CheckpointLogger(checkpoint_dir="fastrx_checkpoints", keep_last=True),
     ]
     logger = CompositeLogger(loggers)
     
@@ -126,8 +126,8 @@ if __name__ == "__main__":
         target_metric="Jaccard",
         higher_is_better=True,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        epochs=40,
-        logger=logger
+        epochs=100,
+        logger=logger,
     )
     results = trainer.fit()
     
@@ -140,7 +140,7 @@ if __name__ == "__main__":
     
     evaluator = Evaluator(
         model=model,
-        test_loader=DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn),
+        test_loader=DataLoader(test_dataset, batch_size=256, shuffle=False, collate_fn=collate_fn),
         metrics=metrics,
         device="cuda" if torch.cuda.is_available() else "cpu",
     )

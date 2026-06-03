@@ -210,3 +210,9 @@ testing.py
 data/mappings/
 .vscode/
 ddinter_mapped_atc_codes.csv
+.venv/
+mlp_checkpoints/
+gamenet_checkpoints/
+drug_jepa_checkpoints/
+fastrx_checkpoints/
+foursdrug_checkpoints/

@@ -1,5 +1,7 @@
 import logging
 
+import torch.nn as nn
+
 from ehrdrec.datasets.multi_hot import MultiHotDataset
 from ehrdrec.evaluation import Evaluator
 from ehrdrec.loading import MIMIC3Loader
@@ -37,7 +39,7 @@ if __name__ == "__main__":
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    model = MLP(input_size=input_size, hidden_sizes=[512, 256], output_size=output_size)
+    model = MLP(input_size=input_size, hidden_sizes=[32], output_size=output_size, dropout=0.5)
     
     loss_fn = BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

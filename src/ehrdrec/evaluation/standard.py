@@ -30,9 +30,10 @@ class Evaluator(BaseEvaluator):
                     inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
-                outputs = self.model(inputs)
+                output = self.model(inputs)
+                logits = output["predictions"]
                 for metric in self.metrics:
-                    metric.update(outputs, targets)
+                    metric.update(logits, targets)
 
         # Average metrics over all batches
         test_metrics = {metric.name: metric.compute() for metric in self.metrics}

@@ -23,4 +23,4 @@ class FourSDrug(nn.Module):
 
     def forward(self, symptoms):
         h_s = self.encode_symptoms(symptoms)
-        return h_s @ self.drug_emb.weight.T
+        return {"predictions": h_s @ self.drug_emb.weight.T}

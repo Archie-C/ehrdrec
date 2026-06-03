@@ -121,4 +121,4 @@ class GameNetFast(nn.Module):
 
         logits = self.output_layer(response)
 
-        return logits
+        return {"predictions": logits}

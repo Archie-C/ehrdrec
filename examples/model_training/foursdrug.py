@@ -1,4 +1,6 @@
 import logging
+import torch
+from torch.utils.data import DataLoader
 
 from ehrdrec.datasets.multi_hot import MultiHotDataset
 from ehrdrec.evaluation import Evaluator
@@ -6,11 +8,9 @@ from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
 from ehrdrec.processing import MultiHotProcessor
-from ehrdrec.training import Trainer
+from ehrdrec.training import Trainer, ConsoleLogger, CheckpointLogger, CompositeLogger
 from ehrdrec.models import FourSDrug
-import torch
-
-from torch.utils.data import DataLoader
+from ehrdrec.training.losses import BCELoss
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
 logging.basicConfig()
@@ -42,7 +42,7 @@ if __name__ == "__main__":
         emb_dim=128,
     )
     
-    loss_fn = torch.nn.BCEWithLogitsLoss()
+    loss_fn = BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     metrics = [
         Jaccard(), 
@@ -62,6 +62,12 @@ if __name__ == "__main__":
         )
     ]
     
+    loggers = [
+        ConsoleLogger(),
+        CheckpointLogger(checkpoint_dir="foursdrug_checkpoints", keep_last=True),
+    ]
+    logger = CompositeLogger(loggers)
+
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -69,8 +75,11 @@ if __name__ == "__main__":
         loss_fn=loss_fn,
         optimizer=optimizer,
         metrics=metrics,
+        target_metric="Jaccard",
+        higher_is_better=True,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        epochs=5,
+        epochs=40,
+        logger=logger,
     )
     results = trainer.fit()
     

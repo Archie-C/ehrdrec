@@ -28,10 +28,10 @@ class Evaluator(BaseEvaluator):
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 else:
                     inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                targets = targets["atc5"].to(self.device) if isinstance(targets, dict) else targets.to(self.device)
 
                 output = self.model(inputs)
-                logits = output["predictions"]
+                logits = output["predictions"] if isinstance(output, dict) else output
                 for metric in self.metrics:
                     metric.update(logits, targets)
 

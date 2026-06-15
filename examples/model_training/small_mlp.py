@@ -37,9 +37,9 @@ if __name__ == "__main__":
     input_size = x.shape[0]
     print(f"Input size: {input_size}, Output size: {output_size}")
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    model = MLP(input_size=input_size, hidden_sizes=[32], output_size=output_size, dropout=0.5)
+    model = MLP(input_size=input_size, hidden_sizes=[14, 94, 267, 889], output_size=output_size, dropout=0.5)
     
     loss_fn = BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

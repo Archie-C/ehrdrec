@@ -1,7 +1,8 @@
 from .base import BaseTrainer
 from .standard import Trainer
 from .logging import TrainerLogger, ConsoleLogger, TensorBoardLogger, CheckpointLogger, CompositeLogger
-from .jepa import StagedJEPATrainer, StageConfig, FreezeConfig, pretrain_target_space
+from .jepa import StagedJepaTrainer, FreezeConfig
+from .tuning import Tuner
 
 __all__ = [
     "BaseTrainer",
@@ -11,8 +12,7 @@ __all__ = [
     "TensorBoardLogger",
     "CheckpointLogger",
     "CompositeLogger",
-    "StagedJEPATrainer",
-    "StageConfig",
+    "StagedJepaTrainer",
     "FreezeConfig",
-    "pretrain_target_space",
+    "Tuner",
 ]

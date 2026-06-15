@@ -10,7 +10,7 @@ class Micron(nn.Module):
         ddi_adjacency_matrix: torch.Tensor,
         embedding_dim: int = 128,
         dropout: float = 0.5,
-        return_losses: bool = False,
+        return_losses: bool = True,
     ) -> None:
         super(Micron, self).__init__()
         
@@ -100,6 +100,7 @@ class Micron(nn.Module):
         
         return {
             "predictions": drug_rep,
+            "predictions_last": drug_rep_last,
             "losses" : {
                 "reconstruction_loss": reconstruction_loss,
                 "ddi_loss": ddi_loss,

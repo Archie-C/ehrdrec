@@ -17,7 +17,7 @@ logger.addHandler(logging.NullHandler())
 
 class MultiHotProcessorAllATCs(BaseProcessor):
 
-    PROCESSOR_VERSION = 3
+    PROCESSOR_VERSION = 1
 
     def __init__(self, cache_dir: Path | None = None):
         super().__init__()

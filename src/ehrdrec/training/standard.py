@@ -1,4 +1,5 @@
 import copy
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -8,6 +9,9 @@ from torch.utils.data import DataLoader
 from ehrdrec.models.dataclasses import TrainingResults
 from ehrdrec.training import BaseTrainer
 from ehrdrec.training.logging import TrainerLogger
+
+if TYPE_CHECKING:
+    import optuna
 
 class Trainer(BaseTrainer):
     def __init__(
@@ -23,6 +27,7 @@ class Trainer(BaseTrainer):
         device: str | torch.device = "cuda",
         epochs: int = 10,
         logger: TrainerLogger | None = None,
+        trial: "optuna.Trial | None" = None,
     ):
         super().__init__(
             model=model,
@@ -37,9 +42,11 @@ class Trainer(BaseTrainer):
             epochs=epochs,
             logger=logger,
         )
+        self.trial = trial
     
-    # TODO: Add support for metrics, logging, learning rate scheduling, early stopping, etc.
     def fit(self) -> TrainingResults:
+        import optuna
+
         best_val_score = None
         best_model_state = copy.deepcopy(self.model.state_dict())
         best_epoch = 0
@@ -73,6 +80,11 @@ class Trainer(BaseTrainer):
                         best_val_metrics = val_metrics
                         if self.logger is not None:
                             self.logger.on_best_model(epoch, best_val_score, best_model_state)
+
+                    if self.trial is not None:
+                        self.trial.report(current, epoch)
+                        if self.trial.should_prune():
+                            raise optuna.TrialPruned()
                 else:
                     # no target metric, just keep latest
                     best_model_state = copy.deepcopy(self.model.state_dict())
@@ -81,7 +93,7 @@ class Trainer(BaseTrainer):
                     best_val_metrics = val_metrics
                     if self.logger is not None:
                         self.logger.on_best_model(epoch, None, best_model_state)
-                        
+
             if self.logger is not None:
                 self.logger.on_epoch_end(epoch, train_metrics, val_metrics)
 
@@ -122,7 +134,7 @@ class Trainer(BaseTrainer):
                 losses = None
 
             # The loss function must be able to handle input losses (we can't just use the standard torch ones)
-            loss = self.loss_fn(logits, targets, losses=losses)
+            loss = self.loss_fn(logits, targets, model_output=output, features=features, losses=losses)
 
             loss.backward()
             self.optimizer.step()

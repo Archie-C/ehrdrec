@@ -120,3 +120,54 @@ class MultiHotDatasetWithPatientLookBack(Dataset):
     
     def __len__(self):
         return len(self.samples)
+    
+class MultiHotDatasetWithAllATCLevels(Dataset):
+    def __init__(
+        self,
+        multi_hot_data_frame: pl.DataFrame,
+        *,
+        dtype: torch.dtype = torch.float32,
+    ):
+        self.data_frame = multi_hot_data_frame
+        self.dtype = dtype
+
+    def __len__(self) -> int:
+        return self.data_frame.height
+
+    def __getitem__(self, idx: int):
+        row = self.data_frame.row(idx, named=True)
+        
+        x = {
+            "diagnoses": torch.tensor(
+                row["diagnosis_multihot"],
+                dtype=self.dtype,
+            ),
+            "procedures": torch.tensor(
+                row["procedure_multihot"],
+                dtype=self.dtype,
+            ),
+        }
+        
+        y = {
+            "atc5": torch.tensor(
+                row["atc5_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc4": torch.tensor(
+                row["atc4_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc3": torch.tensor(
+                row["atc3_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc2": torch.tensor(
+                row["atc2_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc1": torch.tensor(
+                row["atc1_multihot"],
+                dtype=self.dtype,
+            ),
+        }
+        return x, y

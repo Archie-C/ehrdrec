@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from ehrdrec.models.dataclasses import TrainingResults
 from ehrdrec.training import BaseTrainer
 from ehrdrec.training.logging import TrainerLogger
+from ehrdrec.utils.seeding import seed_everything
 
 if TYPE_CHECKING:
     import optuna
@@ -28,6 +29,7 @@ class Trainer(BaseTrainer):
         epochs: int = 10,
         logger: TrainerLogger | None = None,
         trial: "optuna.Trial | None" = None,
+        seed: int | None = None,
     ):
         super().__init__(
             model=model,
@@ -43,9 +45,13 @@ class Trainer(BaseTrainer):
             logger=logger,
         )
         self.trial = trial
+        self.seed = seed
     
     def fit(self) -> TrainingResults:
         import optuna
+
+        if self.seed is not None:
+            seed_everything(self.seed)
 
         best_val_score = None
         best_model_state = copy.deepcopy(self.model.state_dict())
@@ -105,6 +111,7 @@ class Trainer(BaseTrainer):
             best_train_metrics=best_train_metrics,
             best_val_metrics=best_val_metrics,
             best_epoch=best_epoch,
+            seed=self.seed,
         )
 
     def _train_one_epoch(self) -> tuple[float, dict[str, float]]:

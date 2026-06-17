@@ -1,5 +1,5 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass(slots=True)
 class TrainingResults:
@@ -10,3 +10,4 @@ class TrainingResults:
     best_train_metrics: dict[str, float]
     best_val_metrics: dict[str, float]
     best_epoch: int
+    seed: int | None = field(default=None)

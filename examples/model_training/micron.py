@@ -8,11 +8,11 @@ from ehrdrec.evaluation import Evaluator
 from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
-from ehrdrec.models import GameNetFast
+from ehrdrec.models import Micron
 from ehrdrec.models.utils import create_ehr_adjacency_matrix, create_ddi_adjacency_matrix
 from ehrdrec.processing import MultiHotProcessor
 from ehrdrec.training import Trainer, ConsoleLogger, CheckpointLogger, CompositeLogger
-from ehrdrec.training.losses import BCELoss
+from ehrdrec.training.losses import MicronLoss
 
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
@@ -74,17 +74,17 @@ if __name__ == "__main__":
     val_loader   = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_patient_visit_histories)
     test_loader  = DataLoader(test_dataset,  batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_patient_visit_histories)
 
-    model = GameNetFast(
+    model = Micron(
         n_diagnoses=len(processor.diagnoses_vocab.id_to_token),
         n_procedures=len(processor.procedures_vocab.id_to_token),
         n_medications=output_size,
-        medication_adjacency_matrix=ehr_adj,
         ddi_adjacency_matrix=ddi_adj,
-        diagnoses_embedding_dim=128,
-        procedures_embedding_dim=128,
-        hidden_dim=128,
-        query_dim=128,
+        embedding_dim=128,
+        dropout=0.5,
+        return_losses=True,
     )
+    
+    loss_fn = MicronLoss(alpha=0.5)
 
     metrics = [
         Jaccard(),
@@ -106,14 +106,14 @@ if __name__ == "__main__":
 
     logger = CompositeLogger([
         ConsoleLogger(),
-        CheckpointLogger(checkpoint_dir="gamenet_checkpoints", keep_last=True),
+        CheckpointLogger(checkpoint_dir="checkpoints/micron", keep_last=True),
     ])
 
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=BCELoss(),
+        loss_fn=loss_fn,
         optimizer=torch.optim.Adam(model.parameters(), lr=LR),
         metrics=metrics,
         target_metric="Jaccard",

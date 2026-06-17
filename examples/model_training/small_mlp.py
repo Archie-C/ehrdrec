@@ -1,5 +1,7 @@
 import logging
 
+import torch.nn as nn
+
 from ehrdrec.datasets.multi_hot import MultiHotDataset
 from ehrdrec.evaluation import Evaluator
 from ehrdrec.loading import MIMIC3Loader
@@ -17,8 +19,6 @@ logging.getLogger("ehrdrec").setLevel(logging.INFO)
 logging.basicConfig()
 
 ATC_LEVEL = 5
-# Set to 0 to silence per-epoch lines entirely, or e.g. 5 to log every 5th epoch.
-LOG_EVERY_EPOCH = 1
 
 if __name__ == "__main__":
     loader = MIMIC3Loader()
@@ -40,9 +40,9 @@ if __name__ == "__main__":
     input_size = x.shape[0]
     print(f"Input size: {input_size}, Output size: {output_size}")
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    model = MLP(input_size=input_size, hidden_sizes=[512, 256], output_size=output_size)
+    model = MLP(input_size=input_size, hidden_sizes=[14, 94, 267, 889], output_size=output_size, dropout=0.5)
     
     loss_fn = BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -64,7 +64,7 @@ if __name__ == "__main__":
         )
     ]
     loggers = [
-        ConsoleLogger(log_every=LOG_EVERY_EPOCH),
+        ConsoleLogger(),
         CheckpointLogger(checkpoint_dir="mlp_checkpoints", keep_last=True),
     ]
     logger = CompositeLogger(loggers)

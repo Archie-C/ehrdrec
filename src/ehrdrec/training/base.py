@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from ehrdrec.models.dataclasses import TrainingResults
+from ehrdrec.training.logging import TrainerLogger
 
 
 class BaseTrainer(ABC):
@@ -17,8 +18,11 @@ class BaseTrainer(ABC):
         loss_fn: nn.Module | None = None,
         optimizer: Optimizer | None = None,
         metrics: list | None = None,
+        target_metric: str | None = None,
+        higher_is_better: bool = True,
         device: str | torch.device = "cuda",
         epochs: int = 10,
+        logger: TrainerLogger | None = None,
     ):
         self.device = torch.device(device)
         self.train_loader = train_loader
@@ -26,8 +30,11 @@ class BaseTrainer(ABC):
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.metrics = metrics or []
+        self.target_metric = target_metric
+        self.higher_is_better = higher_is_better
         self.epochs = epochs
         self.model = model.to(self.device)
+        self.logger = logger
 
     @abstractmethod
     def fit(self) -> TrainingResults:

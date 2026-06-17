@@ -1,5 +1,3 @@
-from typing import Any
-
 import polars as pl
 import torch
 from torch.utils.data import Dataset
@@ -11,12 +9,14 @@ class MultiHotDataset(Dataset):
         multi_hot_data_frame: pl.DataFrame,
         *,
         target_col: str,
-        feature_cols: list[str],
+        n_diagnoses: int,
+        n_procedures: int,
         dtype: torch.dtype = torch.float32,
     ):
         self.data_frame = multi_hot_data_frame
         self.target_col = target_col
-        self.feature_cols = feature_cols
+        self.n_diagnoses = n_diagnoses
+        self.n_procedures = n_procedures
         self.dtype = dtype
 
     def __len__(self) -> int:
@@ -25,25 +25,19 @@ class MultiHotDataset(Dataset):
     def __getitem__(self, idx: int):
         row = self.data_frame.row(idx, named=True)
 
-        features = self._flatten_values([row[col] for col in self.feature_cols])
-        target = self._flatten_values([row[self.target_col]])
-
-        x = torch.tensor(features, dtype=self.dtype)
-        y = torch.tensor(target, dtype=self.dtype)
+        x = torch.cat([
+            self._ids_to_dense(row["diagnosis_ids"], self.n_diagnoses),
+            self._ids_to_dense(row["procedure_ids"], self.n_procedures),
+        ])
+        y = torch.tensor(row[self.target_col], dtype=self.dtype)
 
         return x, y
-    
-    @staticmethod
-    def _flatten_values(values: list[Any]) -> list[float]:
-        flattened = []
 
-        for value in values:
-            if isinstance(value, (list, tuple)):
-                flattened.extend(value)
-            else:
-                flattened.append(value)
-
-        return flattened
+    def _ids_to_dense(self, ids: list[int], size: int) -> torch.Tensor:
+        vec = torch.zeros(size, dtype=self.dtype)
+        if ids:
+            vec[ids] = 1.0
+        return vec
     
 class MultiHotDatasetWithPatientLookBack(Dataset):
     def __init__(
@@ -51,14 +45,16 @@ class MultiHotDatasetWithPatientLookBack(Dataset):
         multi_hot_data_frame: pl.DataFrame,
         *,
         target_col: str,
-        feature_cols: list[str],
+        n_diagnoses: int,
+        n_procedures: int,
         patient_id_col: str,
         time_col: str,
         look_back: int = 3,
         dtype: torch.dtype = torch.float32,
     ):
         self.target_col = target_col
-        self.feature_cols = feature_cols
+        self.n_diagnoses = n_diagnoses
+        self.n_procedures = n_procedures
         self.patient_id_col = patient_id_col
         self.time_col = time_col
         self.look_back = look_back
@@ -95,16 +91,20 @@ class MultiHotDatasetWithPatientLookBack(Dataset):
 
         history_df = patient_df.slice(start_idx, end_idx - start_idx)
         target_row = patient_df.row(target_idx, named=True)
+        n_visits = end_idx - start_idx
+
+        diag = torch.zeros(n_visits, self.n_diagnoses, dtype=self.dtype)
+        proc = torch.zeros(n_visits, self.n_procedures, dtype=self.dtype)
+        for i, ids_row in enumerate(history_df["diagnosis_ids"].to_list()):
+            if ids_row:
+                diag[i, ids_row] = 1.0
+        for i, ids_row in enumerate(history_df["procedure_ids"].to_list()):
+            if ids_row:
+                proc[i, ids_row] = 1.0
 
         x = {
-            "diagnoses": torch.tensor(
-                history_df["diagnosis_multihot"].to_list(),
-                dtype=self.dtype,
-            ),
-            "procedures": torch.tensor(
-                history_df["procedure_multihot"].to_list(),
-                dtype=self.dtype,
-            ),
+            "diagnoses": diag,
+            "procedures": proc,
             "medication_history": torch.tensor(
                 history_df[self.target_col].to_list(),
                 dtype=self.dtype,
@@ -120,3 +120,54 @@ class MultiHotDatasetWithPatientLookBack(Dataset):
     
     def __len__(self):
         return len(self.samples)
+    
+class MultiHotDatasetWithAllATCLevels(Dataset):
+    def __init__(
+        self,
+        multi_hot_data_frame: pl.DataFrame,
+        *,
+        dtype: torch.dtype = torch.float32,
+    ):
+        self.data_frame = multi_hot_data_frame
+        self.dtype = dtype
+
+    def __len__(self) -> int:
+        return self.data_frame.height
+
+    def __getitem__(self, idx: int):
+        row = self.data_frame.row(idx, named=True)
+        
+        x = {
+            "diagnoses": torch.tensor(
+                row["diagnosis_multihot"],
+                dtype=self.dtype,
+            ),
+            "procedures": torch.tensor(
+                row["procedure_multihot"],
+                dtype=self.dtype,
+            ),
+        }
+        
+        y = {
+            "atc5": torch.tensor(
+                row["atc5_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc4": torch.tensor(
+                row["atc4_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc3": torch.tensor(
+                row["atc3_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc2": torch.tensor(
+                row["atc2_multihot"],
+                dtype=self.dtype,
+            ),
+            "atc1": torch.tensor(
+                row["atc1_multihot"],
+                dtype=self.dtype,
+            ),
+        }
+        return x, y

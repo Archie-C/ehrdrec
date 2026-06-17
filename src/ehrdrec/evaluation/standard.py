@@ -28,11 +28,12 @@ class Evaluator(BaseEvaluator):
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 else:
                     inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                targets = targets["atc5"].to(self.device) if isinstance(targets, dict) else targets.to(self.device)
 
-                outputs = self.model(inputs)
+                output = self.model(inputs)
+                logits = output["predictions"] if isinstance(output, dict) else output
                 for metric in self.metrics:
-                    metric.update(outputs, targets)
+                    metric.update(logits, targets)
 
         # Average metrics over all batches
         test_metrics = {metric.name: metric.compute() for metric in self.metrics}

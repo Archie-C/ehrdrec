@@ -4,46 +4,72 @@ import optuna
 import torch
 from torch.utils.data import DataLoader
 
-from ehrdrec.datasets.multi_hot import MultiHotDataset
+from ehrdrec.datasets import MultiHotDatasetWithPatientLookBack, collate_patient_visit_histories
 from ehrdrec.evaluation import Evaluator
-from ehrdrec.loading import MIMIC4Loader
+from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
-from ehrdrec.models import MLP
+from ehrdrec.models import Micron
+from ehrdrec.models.utils import create_ddi_adjacency_matrix
 from ehrdrec.processing import MultiHotProcessor
 from ehrdrec.training import Trainer, Tuner, TqdmLogger, TunerTqdmCallback
-from ehrdrec.training.losses import BCELoss
+from ehrdrec.training.losses import MicronLoss
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
 logging.basicConfig()
-optuna.logging.set_verbosity(optuna.logging.INFO)
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 ATC_LEVEL = 5
-N_TRIALS = 30
-TUNE_EPOCHS = 20
+LOOK_BACK = 3
+N_TRIALS = 20
+TUNE_EPOCHS = 15
 FINAL_EPOCHS = 40
 
 if __name__ == "__main__":
-    loader = MIMIC4Loader()
-    data = loader.load("/home/cararc/data/mimic-iv-3.1/hosp")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    loader = MIMIC3Loader()
+    data = loader.load("/home/cararc/data/mimic-iii-1.4")
     processor = MultiHotProcessor()
     processed_data = processor.process(data, minimum_admissions=2, atc_level=ATC_LEVEL, force_reload=True)
+
+    diagnoses_vocab = processor.diagnoses_vocab
+    procedures_vocab = processor.procedures_vocab
     medications_vocab = processor.medications_vocab
-    n_diagnoses = len(processor.diagnoses_vocab.id_to_token)
-    n_procedures = len(processor.procedures_vocab.id_to_token)
 
-    dataset_kwargs = dict(target_col="medication_multihot", n_diagnoses=n_diagnoses, n_procedures=n_procedures)
-    train_dataset = MultiHotDataset(processed_data.train_frame.collect(), **dataset_kwargs)
-    val_dataset = MultiHotDataset(processed_data.val_frame.collect(), **dataset_kwargs)
-    test_dataset = MultiHotDataset(processed_data.test_frame.collect(), **dataset_kwargs)
+    train_frame = processed_data.train_frame.collect()
+    val_frame = processed_data.val_frame.collect()
+    test_frame = processed_data.test_frame.collect()
 
-    x, y = train_dataset[0]
-    input_size = x.shape[0]
-    output_size = y.shape[0]
-    print(f"Input size: {input_size}, Output size: {output_size}")
+    dataset_kwargs = dict(
+        target_col="medication_multihot",
+        n_diagnoses=len(diagnoses_vocab.id_to_token),
+        n_procedures=len(procedures_vocab.id_to_token),
+        patient_id_col="patient_id",
+        time_col="admission_time",
+        look_back=LOOK_BACK,
+        dtype=torch.float32,
+    )
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    train_dataset = MultiHotDatasetWithPatientLookBack(train_frame, **dataset_kwargs)
+    val_dataset = MultiHotDatasetWithPatientLookBack(val_frame, **dataset_kwargs)
+    test_dataset = MultiHotDatasetWithPatientLookBack(test_frame, **dataset_kwargs)
+
+    _, sample_y = train_dataset[0]
+    output_size = sample_y.shape[0]
+    print(f"Output size: {output_size}")
+
+    # The DDI adjacency matrix doesn't depend on hyperparameters — build once and reuse across trials.
+    ddi_adj_matrix = create_ddi_adjacency_matrix(
+        medications_vocab=medications_vocab,
+        ddinter_path="data/ddinter2/mapping/ddinter_mapped_atc_codes.csv",
+        n_medications=output_size,
+        atc_level=ATC_LEVEL,
+    )
+    print(f"DDI adjacency matrix shape: {ddi_adj_matrix.shape}")
+
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, collate_fn=collate_patient_visit_histories)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, collate_fn=collate_patient_visit_histories)
 
     ddi_kwargs = dict(
         medications_vocab=medications_vocab,
@@ -68,15 +94,17 @@ if __name__ == "__main__":
     def trial_fn(trial: optuna.Trial, train_loader: DataLoader, val_loader: DataLoader) -> Trainer:
         lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         dropout = trial.suggest_float("dropout", 0.1, 0.6)
-        n_layers = trial.suggest_int("n_layers", 2, 4)
-        hidden_size = trial.suggest_categorical("hidden_size", [64, 128, 256, 512])
-        hidden_sizes = [hidden_size] * n_layers
+        embedding_dim = trial.suggest_categorical("embedding_dim", [64, 128, 256])
+        alpha = trial.suggest_float("alpha", 0.3, 0.9)
 
-        model = MLP(
-            input_size=input_size,
-            hidden_sizes=hidden_sizes,
-            output_size=output_size,
+        model = Micron(
+            n_diagnoses=len(diagnoses_vocab.id_to_token),
+            n_procedures=len(procedures_vocab.id_to_token),
+            n_medications=output_size,
+            ddi_adjacency_matrix=ddi_adj_matrix,
+            embedding_dim=embedding_dim,
             dropout=dropout,
+            return_losses=True,
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -84,12 +112,12 @@ if __name__ == "__main__":
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            loss_fn=BCELoss(),
+            loss_fn=MicronLoss(alpha=alpha),
             optimizer=optimizer,
             metrics=make_tuning_metrics(),
             target_metric="Jaccard",
             higher_is_better=True,
-            device="cuda" if torch.cuda.is_available() else "cpu",
+            device=device,
             epochs=TUNE_EPOCHS,
             logger=TqdmLogger(epochs=TUNE_EPOCHS, metrics=["Jaccard"], desc=f"Trial {trial.number}"),
             trial=trial,
@@ -110,12 +138,14 @@ if __name__ == "__main__":
 
     # Retrain with best params for full epochs, then evaluate on test
     best_params = study.best_params
-    hidden_sizes = [best_params["hidden_size"]] * best_params["n_layers"]
-    model = MLP(
-        input_size=input_size,
-        hidden_sizes=hidden_sizes,
-        output_size=output_size,
+    model = Micron(
+        n_diagnoses=len(diagnoses_vocab.id_to_token),
+        n_procedures=len(procedures_vocab.id_to_token),
+        n_medications=output_size,
+        ddi_adjacency_matrix=ddi_adj_matrix,
+        embedding_dim=best_params["embedding_dim"],
         dropout=best_params["dropout"],
+        return_losses=True,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=best_params["lr"])
 
@@ -123,12 +153,12 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=BCELoss(),
+        loss_fn=MicronLoss(alpha=best_params["alpha"]),
         optimizer=optimizer,
         metrics=make_full_metrics(),
         target_metric="Jaccard",
         higher_is_better=True,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
         epochs=FINAL_EPOCHS,
         logger=TqdmLogger(epochs=FINAL_EPOCHS, metrics=["Jaccard"], desc="Final training"),
     )
@@ -137,9 +167,9 @@ if __name__ == "__main__":
 
     evaluator = Evaluator(
         model=model,
-        test_loader=DataLoader(test_dataset, batch_size=32, shuffle=False),
+        test_loader=DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_patient_visit_histories),
         metrics=make_full_metrics(),
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
     )
     eval_results = evaluator.run()
     print("\nTest evaluation results:")

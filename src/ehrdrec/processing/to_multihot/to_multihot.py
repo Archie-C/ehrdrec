@@ -17,7 +17,7 @@ logger.addHandler(logging.NullHandler())
 
 class MultiHotProcessor(BaseProcessor):
 
-    PROCESSOR_VERSION = 2
+    PROCESSOR_VERSION = 3
 
     def __init__(self, cache_dir: Path | None = None):
         super().__init__()
@@ -373,24 +373,14 @@ class MultiHotProcessor(BaseProcessor):
         data: pl.LazyFrame,
         include_reserved: bool = True,
     ) -> pl.LazyFrame:
+        # diagnosis_ids and procedure_ids are kept as sparse index lists to avoid
+        # storing ~25k and ~13k float vectors per row; dense expansion happens in the dataset.
         data = data.with_columns(
-            [
-                self.diagnoses_vocab.to_multihot_expr(
-                    "diagnosis_ids",
-                    "diagnosis_multihot",
-                    include_reserved=include_reserved,
-                ),
-                self.procedures_vocab.to_multihot_expr(
-                    "procedure_ids",
-                    "procedure_multihot",
-                    include_reserved=include_reserved,
-                ),
-                self.medications_vocab.to_multihot_expr(
-                    "atc_ids",
-                    "medication_multihot",
-                    include_reserved=include_reserved,
-                ),
-            ]
+            self.medications_vocab.to_multihot_expr(
+                "atc_ids",
+                "medication_multihot",
+                include_reserved=include_reserved,
+            ),
         )
 
         return data.drop(
@@ -398,8 +388,6 @@ class MultiHotProcessor(BaseProcessor):
                 "diagnoses",
                 "procedures",
                 "atc_codes",
-                "diagnosis_ids",
-                "procedure_ids",
                 "atc_ids",
                 "medications",
             ]

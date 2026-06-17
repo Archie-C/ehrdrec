@@ -45,7 +45,8 @@ if __name__ == "__main__":
 
     dataset_kwargs = dict(
         target_col="medication_multihot",
-        feature_cols=["diagnosis_multihot", "procedure_multihot"],
+        n_diagnoses=len(processor.diagnoses_vocab.id_to_token),
+        n_procedures=len(processor.procedures_vocab.id_to_token),
         patient_id_col="patient_id",
         time_col="admission_time",
         look_back=LOOK_BACK,

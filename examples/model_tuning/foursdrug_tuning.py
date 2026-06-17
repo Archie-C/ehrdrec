@@ -6,17 +6,17 @@ from torch.utils.data import DataLoader
 
 from ehrdrec.datasets.multi_hot import MultiHotDataset
 from ehrdrec.evaluation import Evaluator
-from ehrdrec.loading import MIMIC4Loader
+from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
-from ehrdrec.models import MLP
+from ehrdrec.models import FourSDrug
 from ehrdrec.processing import MultiHotProcessor
 from ehrdrec.training import Trainer, Tuner, TqdmLogger, TunerTqdmCallback
 from ehrdrec.training.losses import BCELoss
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
 logging.basicConfig()
-optuna.logging.set_verbosity(optuna.logging.INFO)
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 ATC_LEVEL = 5
 N_TRIALS = 30
@@ -24,8 +24,8 @@ TUNE_EPOCHS = 20
 FINAL_EPOCHS = 40
 
 if __name__ == "__main__":
-    loader = MIMIC4Loader()
-    data = loader.load("/home/cararc/data/mimic-iv-3.1/hosp")
+    loader = MIMIC3Loader()
+    data = loader.load("/home/cararc/data/mimic-iii-1.4")
     processor = MultiHotProcessor()
     processed_data = processor.process(data, minimum_admissions=2, atc_level=ATC_LEVEL, force_reload=True)
     medications_vocab = processor.medications_vocab
@@ -67,16 +67,12 @@ if __name__ == "__main__":
 
     def trial_fn(trial: optuna.Trial, train_loader: DataLoader, val_loader: DataLoader) -> Trainer:
         lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        dropout = trial.suggest_float("dropout", 0.1, 0.6)
-        n_layers = trial.suggest_int("n_layers", 2, 4)
-        hidden_size = trial.suggest_categorical("hidden_size", [64, 128, 256, 512])
-        hidden_sizes = [hidden_size] * n_layers
+        emb_dim = trial.suggest_categorical("emb_dim", [32, 64, 128, 256])
 
-        model = MLP(
-            input_size=input_size,
-            hidden_sizes=hidden_sizes,
-            output_size=output_size,
-            dropout=dropout,
+        model = FourSDrug(
+            num_symptoms=input_size,
+            num_drugs=output_size,
+            emb_dim=emb_dim,
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -110,12 +106,10 @@ if __name__ == "__main__":
 
     # Retrain with best params for full epochs, then evaluate on test
     best_params = study.best_params
-    hidden_sizes = [best_params["hidden_size"]] * best_params["n_layers"]
-    model = MLP(
-        input_size=input_size,
-        hidden_sizes=hidden_sizes,
-        output_size=output_size,
-        dropout=best_params["dropout"],
+    model = FourSDrug(
+        num_symptoms=input_size,
+        num_drugs=output_size,
+        emb_dim=best_params["emb_dim"],
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=best_params["lr"])
 

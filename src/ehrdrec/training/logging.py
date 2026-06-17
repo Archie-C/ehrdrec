@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import torch
+from tqdm.auto import tqdm
 
 @runtime_checkable
 class TrainerLogger(Protocol):
@@ -33,18 +34,27 @@ class TrainerLogger(Protocol):
         ...
         
 class ConsoleLogger:
-    """Logs epoch summaries to Python's stdlib logging (default: INFO)."""
- 
-    def __init__(self, name: str = "trainer", level: int = logging.INFO) -> None:
+    """Logs epoch summaries to Python's stdlib logging (default: INFO).
+
+    ``log_every`` controls how often per-epoch lines are printed (e.g. 5 logs
+    epochs 1, 5, 10, 15, ...; 0 disables per-epoch logging entirely).
+    ``on_best_model`` is unaffected, so you never lose track of improvements.
+    """
+
+    def __init__(self, name: str = "trainer", level: int = logging.INFO, log_every: int = 1) -> None:
         self._log = logging.getLogger(name)
         self._log.setLevel(level)
- 
+        self._log_every = log_every
+
     def on_epoch_end(
         self,
         epoch: int,
         train_metrics: dict[str, float],
         val_metrics: dict[str, float] | None,
     ) -> None:
+        if self._log_every <= 0 or (epoch != 1 and epoch % self._log_every != 0):
+            return
+
         self._log.info(f"Epoch {epoch}")
         if train_metrics:
             row = "  ".join(f"{k}: {v:.4f}" for k, v in train_metrics.items())
@@ -185,3 +195,78 @@ class CompositeLogger:
                 errors.append(exc)
         if errors:
             raise ExceptionGroup("logger errors in on_best_model", errors)
+
+
+class TqdmLogger:
+    """Shows one live-updating progress bar instead of a line per epoch.
+
+    Use this wherever per-epoch ``ConsoleLogger`` output would be too noisy —
+    most notably inside an Optuna trial, where a full training run happens
+    once per trial. The bar's postfix is refreshed in place each epoch with
+    the requested metrics, so the loss/metric trend is still visible without
+    flooding the terminal.
+    """
+
+    def __init__(
+        self,
+        epochs: int,
+        metrics: list[str] | None = None,
+        desc: str = "training",
+    ) -> None:
+        self._epochs = epochs
+        self._metric_names = metrics
+        self._postfix: dict[str, str] = {}
+        self._bar = tqdm(total=epochs, desc=desc, leave=False)
+
+    def _filtered(self, prefix: str, values: dict[str, float] | None) -> dict[str, str]:
+        if not values:
+            return {}
+        names = self._metric_names if self._metric_names is not None else list(values.keys())
+        return {f"{prefix}_{name}": f"{values[name]:.4f}" for name in names if name in values}
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        train_metrics: dict[str, float],
+        val_metrics: dict[str, float] | None,
+    ) -> None:
+        self._postfix.update(self._filtered("train", train_metrics))
+        self._postfix.update(self._filtered("val", val_metrics))
+        self._bar.set_postfix(self._postfix)
+        self._bar.update(1)
+        if epoch >= self._epochs:
+            self._bar.close()
+
+    def on_best_model(
+        self,
+        epoch: int,
+        score: float | None,
+        state_dict: dict,
+    ) -> None:
+        if score is not None:
+            self._postfix["best"] = f"{score:.4f}"
+            self._bar.set_postfix(self._postfix)
+
+
+class TunerTqdmCallback:
+    """Optuna study callback: shows a progress bar across trials and logs each
+    trial's result as it finishes, instead of relying on Optuna's own (very
+    verbose) per-step logging.
+
+    Pass an instance via ``Tuner(..., callbacks=[TunerTqdmCallback(...)])``.
+    """
+
+    def __init__(self, n_trials: int, direction: str = "maximize", name: str = "tuner") -> None:
+        self._bar = tqdm(total=n_trials, desc="tuning")
+        self._direction = direction
+        self._log = logging.getLogger(name)
+        self._log.setLevel(logging.INFO)
+
+    def __call__(self, study: "optuna.Study", trial: "optuna.trial.FrozenTrial") -> None:
+        value_str = f"{trial.value:.4f}" if trial.value is not None else "pruned"
+        best_value = study.best_value if study.best_trial is not None else None
+        best_str = f"{best_value:.4f}" if best_value is not None else "n/a"
+
+        self._bar.set_postfix(trial=trial.number, value=value_str, best=best_str)
+        self._bar.update(1)
+        self._log.info(f"Trial {trial.number} finished: value={value_str} best={best_str} params={trial.params}")

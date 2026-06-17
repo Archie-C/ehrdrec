@@ -26,12 +26,15 @@ if __name__ == "__main__":
     processor = MultiHotProcessor()
     processed_data = processor.process(data, minimum_admissions=2, atc_level=ATC_LEVEL, force_reload=True)
     medications_vocab = processor.medications_vocab
-    
+    n_diagnoses = len(processor.diagnoses_vocab.id_to_token)
+    n_procedures = len(processor.procedures_vocab.id_to_token)
+
     print(processed_data.train_frame.columns)
-    
-    train_dataset = MultiHotDataset(processed_data.train_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
-    val_dataset = MultiHotDataset(processed_data.val_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
-    test_dataset = MultiHotDataset(processed_data.test_frame.collect(), target_col="medication_multihot", feature_cols=["diagnosis_multihot", "procedure_multihot"])
+
+    dataset_kwargs = dict(target_col="medication_multihot", n_diagnoses=n_diagnoses, n_procedures=n_procedures)
+    train_dataset = MultiHotDataset(processed_data.train_frame.collect(), **dataset_kwargs)
+    val_dataset = MultiHotDataset(processed_data.val_frame.collect(), **dataset_kwargs)
+    test_dataset = MultiHotDataset(processed_data.test_frame.collect(), **dataset_kwargs)
     x, y = train_dataset[0]
     output_size = y.shape[0]
     input_size = x.shape[0]

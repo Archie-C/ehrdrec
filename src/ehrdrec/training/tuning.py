@@ -23,6 +23,7 @@ class Tuner:
         sampler: optuna.samplers.BaseSampler | None = None,
         study_name: str | None = None,
         storage: str | None = None,
+        callbacks: list[Callable[[optuna.Study, optuna.trial.FrozenTrial], None]] | None = None,
     ):
         self.trial_fn = trial_fn
         self.n_trials = n_trials
@@ -31,6 +32,7 @@ class Tuner:
         self.sampler = sampler
         self.study_name = study_name
         self.storage = storage
+        self.callbacks = callbacks
 
     def tune(
         self,
@@ -69,5 +71,5 @@ class Tuner:
 
             return results.best_val_score
 
-        study.optimize(objective, n_trials=self.n_trials)
+        study.optimize(objective, n_trials=self.n_trials, callbacks=self.callbacks)
         return study, best_results

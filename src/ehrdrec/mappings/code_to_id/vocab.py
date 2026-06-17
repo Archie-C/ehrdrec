@@ -44,6 +44,7 @@ class Vocab:
 
         return (
             pl.col(col)
+            .fill_null([])
             .map_elements(
                 encode_tokens,
                 return_dtype=pl.List(pl.Int64),

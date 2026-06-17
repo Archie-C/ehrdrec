@@ -321,7 +321,7 @@ class MultiHotProcessorAllATCs(BaseProcessor):
 
         vocab = Vocab.__new__(Vocab)
         vocab.token_to_id = data["token_to_id"]
-        vocab.id_to_token = data["id_to_token"]
+        vocab.id_to_token = {int(k): v for k, v in data["id_to_token"].items()}
 
         return vocab
 
@@ -444,30 +444,35 @@ class MultiHotProcessorAllATCs(BaseProcessor):
         return data.with_columns(
             [
                 pl.col("atc_codes")
+                .fill_null([])
                 .map_elements(
                     lambda codes: level_codes(codes, 1),
                     return_dtype=pl.List(pl.Utf8),
                 )
                 .alias("atc1_codes"),
                 pl.col("atc_codes")
+                .fill_null([])
                 .map_elements(
                     lambda codes: level_codes(codes, 2),
                     return_dtype=pl.List(pl.Utf8),
                 )
                 .alias("atc2_codes"),
                 pl.col("atc_codes")
+                .fill_null([])
                 .map_elements(
                     lambda codes: level_codes(codes, 3),
                     return_dtype=pl.List(pl.Utf8),
                 )
                 .alias("atc3_codes"),
                 pl.col("atc_codes")
+                .fill_null([])
                 .map_elements(
                     lambda codes: level_codes(codes, 4),
                     return_dtype=pl.List(pl.Utf8),
                 )
                 .alias("atc4_codes"),
                 pl.col("atc_codes")
+                .fill_null([])
                 .map_elements(
                     lambda codes: level_codes(codes, 5),
                     return_dtype=pl.List(pl.Utf8),

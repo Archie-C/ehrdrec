@@ -219,13 +219,7 @@ class TestMultiHotProcessorHelpers:
         MultiHotProcessor._save_vocab(path, proc.diagnoses_vocab)
         loaded = MultiHotProcessor._load_vocab(path)
         assert loaded.token_to_id == proc.diagnoses_vocab.token_to_id
-        # BUG: JSON does not support integer keys; id_to_token is saved as
-        # {2: "D001"} but reloaded as {"2": "D001"} (string keys). _load_vocab
-        # does not cast them back to int, so decode_list() will return "UNK"
-        # for every id after loading from cache. Fix: cast keys to int in
-        # _load_vocab: {int(k): v for k, v in data["id_to_token"].items()}
-        str_keyed = {str(k): v for k, v in proc.diagnoses_vocab.id_to_token.items()}
-        assert loaded.id_to_token == str_keyed
+        assert loaded.id_to_token == proc.diagnoses_vocab.id_to_token
 
     def test_saved_vocab_is_valid_json(self, proc, tmp_path):
         path = tmp_path / "vocab.json"
@@ -305,12 +299,9 @@ class TestMultiHotProcessorAllATCsHelpers:
                     assert expected_atc1 in atc1_row
 
     def test_null_atc_codes_produce_unk(self, proc):
-        # BUG: Polars skips map_elements for null cells so the null guard inside
-        # level_codes() never fires. A null atc_codes row yields null atc1_codes
-        # instead of ["UNK"]. Fix: use .fill_null([]) before map_elements.
         lf = pl.LazyFrame({"atc_codes": [None]}, schema={"atc_codes": pl.List(pl.Utf8)})
         out = proc._add_atc_level_columns(lf).collect()
-        assert out["atc1_codes"][0] is None  # documents current (buggy) behaviour
+        assert out["atc1_codes"][0].to_list() == ["UNK"]
 
     def test_encode_all_atc_level_columns(self, proc, lf_with_levels):
         out = proc._convert_codes_to_integers(lf_with_levels).collect()

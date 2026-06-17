@@ -166,13 +166,9 @@ class TestVocab:
         assert result == [int(ReservedId.UNK)]
 
     def test_encode_expr_null_row(self, vocab):
-        # BUG: Polars skips map_elements for null cells entirely, so the null
-        # guard inside encode_tokens never fires. A null codes row produces a
-        # null ids cell instead of [UNK]. This test documents current behaviour;
-        # fix encode_expr to use .fill_null([]) before map_elements.
         df = pl.DataFrame({"codes": [None]}, schema={"codes": pl.List(pl.Utf8)})
-        result = df.select(vocab.encode_expr("codes", "ids"))["ids"][0]
-        assert result is None
+        result = df.select(vocab.encode_expr("codes", "ids"))["ids"][0].to_list()
+        assert result == [int(ReservedId.UNK)]
 
     def test_decode_expr_round_trip(self, vocab):
         tokens = ["A10B", "N06A"]

@@ -272,7 +272,7 @@ class MultiHotProcessor(BaseProcessor):
 
         vocab = Vocab.__new__(Vocab)
         vocab.token_to_id = data["token_to_id"]
-        vocab.id_to_token = data["id_to_token"]
+        vocab.id_to_token = {int(k): v for k, v in data["id_to_token"].items()}
 
         return vocab
 

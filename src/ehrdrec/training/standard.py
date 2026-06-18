@@ -61,11 +61,13 @@ class Trainer(BaseTrainer):
 
         final_train_loss = None
         final_val_score = None
+        history: list[dict] = []
 
         for epoch in range(1, self.epochs + 1):
             train_loss, train_metrics = self._train_one_epoch()
 
             final_train_loss = train_loss
+            val_metrics: dict[str, float] = {}
 
             if self.val_loader is not None:
                 val_metrics = self._validate()
@@ -100,6 +102,13 @@ class Trainer(BaseTrainer):
                     if self.logger is not None:
                         self.logger.on_best_model(epoch, None, best_model_state)
 
+            history.append({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train": train_metrics,
+                "val": val_metrics,
+            })
+
             if self.logger is not None:
                 self.logger.on_epoch_end(epoch, train_metrics, val_metrics)
 
@@ -112,6 +121,7 @@ class Trainer(BaseTrainer):
             best_val_metrics=best_val_metrics,
             best_epoch=best_epoch,
             seed=self.seed,
+            history=history,
         )
 
     def _train_one_epoch(self) -> tuple[float, dict[str, float]]:

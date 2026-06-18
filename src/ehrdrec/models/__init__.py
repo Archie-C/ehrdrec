@@ -9,6 +9,7 @@ from .dataclasses import (
     LoadedData,
     ProcessedData,
     ProcessedDataMultiHot,
+    ExperimentConfig,
     TrainingResults,
     EvaluationResults,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "LoadedData",
     "ProcessedData",
     "ProcessedDataMultiHot",
+    "ExperimentConfig",
     "TrainingResults",
     "EvaluationResults",
 ]

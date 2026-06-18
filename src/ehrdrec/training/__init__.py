@@ -10,6 +10,7 @@ from .logging import (
     TunerTqdmCallback,
 )
 from .jepa import StagedJepaTrainer, FreezeConfig
+from .original_gamenet import OriginalGAMENetTrainer
 from .tuning import Tuner
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "TunerTqdmCallback",
     "StagedJepaTrainer",
     "FreezeConfig",
+    "OriginalGAMENetTrainer",
     "Tuner",
 ]

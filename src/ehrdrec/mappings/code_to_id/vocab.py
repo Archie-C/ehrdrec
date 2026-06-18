@@ -1,4 +1,9 @@
+from __future__ import annotations
+
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
 import polars as pl
 
 from ehrdrec.utils import ReservedId
@@ -73,6 +78,23 @@ class Vocab:
             )
             .alias(out_col)
         )
+
+    def save(self, path: str | Path) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # id_to_token keys must be strings in JSON
+        payload = {
+            "token_to_id": self.token_to_id,
+            "id_to_token": {str(k): v for k, v in self.id_to_token.items()},
+        }
+        p.write_text(json.dumps(payload, indent=2))
+
+    @classmethod
+    def load(cls, path: str | Path) -> Vocab:
+        payload = json.loads(Path(path).read_text())
+        token_to_id: dict[str, int] = payload["token_to_id"]
+        id_to_token: dict[int, str] = {int(k): v for k, v in payload["id_to_token"].items()}
+        return cls(token_to_id=token_to_id, id_to_token=id_to_token)
 
     def encode_list(self, tokens: list[str]) -> list[int]:
         return [self.token_to_id.get(x, int(ReservedId.UNK)) for x in tokens]

@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-06-18T00:08:14.664995+00:00",
+  "output_dir": "/home/cararc/ehrdrec/outputs/mimic3_benchmark/mlp",
+  "config": {
+    "dataset_path": "/home/cararc/data/mimic-iii-1.4",
+    "dataset_name": "mimic-iii",
+    "atc_level": 5,
+    "minimum_admissions": 2,
+    "input_size": 6143,
+    "output_size": 548,
+    "batch_size": 32,
+    "epochs": 40,
+    "lr": 0.001761178263848939,
+    "seed": 42,
+    "n_tuning_trials": 30,
+    "tuning_epochs": 20,
+    "tuning_metric": "Jaccard",
+    "model_kwargs": {
+      "dropout": 0.10299859147790863,
+      "n_layers": 3,
+      "hidden_size": 256,
+      "hidden_sizes": [
+        256,
+        256,
+        256
+      ]
+    },
+    "notes": ""
+  },
+  "best_val_metrics": {
+    "Jaccard": 0.4156081023088147,
+    "F1": 0.5871796037773028,
+    "PRAUC": 0.637911856174469,
+    "Binary DDI": 0.22033880650997162,
+    "High Severity Binary DDI": 0.002809775061905384
+  },
+  "best_epoch": 6,
+  "test_metrics": {
+    "Jaccard": 0.40955286647838546,
+    "F1": 0.5811103311103311,
+    "PRAUC": 0.6414156556129456,
+    "Binary DDI": 0.2310926467180252,
+    "High Severity Binary DDI": 0.0045278905890882015
+  },
+  "study": {
+    "n_trials": 30,
+    "best_trial": 10,
+    "best_value": 0.4233796054691577
+  },
+  "vocabs_saved": [
+    "medications",
+    "diagnoses",
+    "procedures"
+  ],
+  "python_version": "3.13.9 (main, Oct 28 2025, 12:10:42) [Clang 20.1.4 ]"
+}

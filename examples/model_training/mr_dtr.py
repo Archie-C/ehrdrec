@@ -8,11 +8,11 @@ from ehrdrec.evaluation import Evaluator
 from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
-from ehrdrec.models import Micron
+from ehrdrec.models import GameNetFast
 from ehrdrec.models.utils import create_ehr_adjacency_matrix, create_ddi_adjacency_matrix
 from ehrdrec.processing import MultiHotProcessor
-from ehrdrec.training import Trainer, ConsoleLogger, CheckpointLogger, CompositeLogger
-from ehrdrec.training.losses import MicronLoss
+from ehrdrec.training import Trainer, CheckpointLogger, CompositeLogger, TqdmLogger
+from ehrdrec.training.losses import BCELoss
 
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
@@ -22,7 +22,8 @@ ATC_LEVEL      = 5
 LOOK_BACK      = 3
 BATCH_SIZE     = 32
 EPOCHS         = 40
-LR             = 5e-4
+LR             = 0.002718469948721719
+SEED           = 42
 
 
 if __name__ == "__main__":
@@ -74,17 +75,17 @@ if __name__ == "__main__":
     val_loader   = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_patient_visit_histories)
     test_loader  = DataLoader(test_dataset,  batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_patient_visit_histories)
 
-    model = Micron(
+    model = GameNetFast(
         n_diagnoses=len(processor.diagnoses_vocab.id_to_token),
         n_procedures=len(processor.procedures_vocab.id_to_token),
         n_medications=output_size,
+        medication_adjacency_matrix=ehr_adj,
         ddi_adjacency_matrix=ddi_adj,
-        embedding_dim=128,
-        dropout=0.5,
-        return_losses=True,
+        diagnoses_embedding_dim=256,
+        procedures_embedding_dim=256,
+        hidden_dim=256,
+        query_dim=128,
     )
-    
-    loss_fn = MicronLoss(alpha=0.5)
 
     metrics = [
         Jaccard(),
@@ -105,15 +106,15 @@ if __name__ == "__main__":
     ]
 
     logger = CompositeLogger([
-        ConsoleLogger(),
-        CheckpointLogger(checkpoint_dir="checkpoints/micron", keep_last=True),
+        TqdmLogger(epochs=EPOCHS, metrics=["Jaccard"], desc="GameNetFast"),
+        CheckpointLogger(checkpoint_dir="gamenet_checkpoints", keep_last=True),
     ])
 
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=loss_fn,
+        loss_fn=BCELoss(),
         optimizer=torch.optim.Adam(model.parameters(), lr=LR),
         metrics=metrics,
         target_metric="Jaccard",
@@ -121,6 +122,7 @@ if __name__ == "__main__":
         device=device,
         epochs=EPOCHS,
         logger=logger,
+        seed=SEED,
     )
 
     results = trainer.fit()

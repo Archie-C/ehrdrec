@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 
 # MIMIC-IV's hosp module ships these gzipped by default; we also accept the
 # decompressed .csv form (whichever exists on disk wins).
-MIMIC4_FILES = ["admissions.csv", "diagnoses_icd.csv", "procedures_icd.csv", "prescriptions.csv"]
+MIMIC4_FILES = [
+    "admissions.csv",
+    "diagnoses_icd.csv",
+    "procedures_icd.csv",
+    "prescriptions.csv",
+    "d_icd_diagnoses.csv",
+    "d_icd_procedures.csv",
+]
 
 
 class MIMIC4Loader(BaseLoader):
@@ -98,28 +105,64 @@ class MIMIC4Loader(BaseLoader):
     # ------------------------------------------------------------------
 
     def _load_source(self, source_path: Path) -> pl.LazyFrame:
-        # Read all four files in parallel
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            f_admissions    = pool.submit(self._read_admissions,    source_path)
-            f_diagnoses     = pool.submit(self._read_codes,         source_path, "diagnoses_icd.csv")
-            f_procedures    = pool.submit(self._read_codes,         source_path, "procedures_icd.csv")
+        # Read source files in parallel.
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_admissions = pool.submit(self._read_admissions, source_path)
+            f_diagnoses = pool.submit(self._read_codes, source_path, "diagnoses_icd.csv")
+            f_procedures = pool.submit(self._read_codes, source_path, "procedures_icd.csv")
+            f_diagnosis_names = pool.submit(
+                self._read_icd_dictionary,
+                source_path,
+                "d_icd_diagnoses.csv",
+                "diagnosis_title",
+            )
+            f_procedure_names = pool.submit(
+                self._read_icd_dictionary,
+                source_path,
+                "d_icd_procedures.csv",
+                "procedure_title",
+            )
             f_prescriptions = pool.submit(self._read_prescriptions, source_path)
 
-            admissions    = f_admissions.result()
-            diagnoses     = f_diagnoses.result()
-            procedures    = f_procedures.result()
+            admissions = f_admissions.result()
+            diagnoses = f_diagnoses.result()
+            procedures = f_procedures.result()
+            diagnosis_names = f_diagnosis_names.result()
+            procedure_names = f_procedure_names.result()
             prescriptions = f_prescriptions.result()
 
         # Group diagnoses and procedures into List[Utf8] per admission
         diag_grouped = (
             diagnoses
+            .join(diagnosis_names, on=["raw_icd_code", "icd_version"], how="left")
+            .with_columns(
+                self._code_title_expr(
+                    "raw_icd_code",
+                    "icd_version",
+                    "diagnosis_title",
+                ).alias("diagnosis_terms")
+            )
             .group_by("hadm_id")
-            .agg(pl.col("icd_code").alias("diagnoses"))
+            .agg([
+                pl.col("icd_code").alias("diagnoses"),
+                pl.col("diagnosis_terms"),
+            ])
         )
         proc_grouped = (
             procedures
+            .join(procedure_names, on=["raw_icd_code", "icd_version"], how="left")
+            .with_columns(
+                self._code_title_expr(
+                    "raw_icd_code",
+                    "icd_version",
+                    "procedure_title",
+                ).alias("procedure_terms")
+            )
             .group_by("hadm_id")
-            .agg(pl.col("icd_code").alias("procedures"))
+            .agg([
+                pl.col("icd_code").alias("procedures"),
+                pl.col("procedure_terms"),
+            ])
         )
 
         # Group prescriptions into List[Struct] per admission
@@ -147,6 +190,8 @@ class MIMIC4Loader(BaseLoader):
             .with_columns([
                 pl.col("diagnoses").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
                 pl.col("procedures").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
+                pl.col("diagnosis_terms").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
+                pl.col("procedure_terms").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
             ])
             .rename({
                 "subject_id": "patient_id",
@@ -161,6 +206,8 @@ class MIMIC4Loader(BaseLoader):
                 "discharge_time",
                 "diagnoses",
                 "procedures",
+                "diagnosis_terms",
+                "procedure_terms",
                 "medications",
             ])
         )
@@ -205,12 +252,52 @@ class MIMIC4Loader(BaseLoader):
                 null_values=[""],
             )
             .drop_nulls("icd_code")
+            .rename({"icd_code": "raw_icd_code"})
             # Disambiguate ICD-9 vs ICD-10 codes that share a string but
             # mean different things (e.g. ICD-9 "4019" vs unrelated ICD-10 codes).
             .with_columns(
-                (pl.col("icd_version") + pl.lit(":") + pl.col("icd_code")).alias("icd_code")
+                (pl.col("icd_version") + pl.lit(":") + pl.col("raw_icd_code")).alias("icd_code")
             )
-            .select(["hadm_id", "icd_code"])
+            .select(["hadm_id", "raw_icd_code", "icd_version", "icd_code"])
+        )
+
+    def _read_icd_dictionary(
+        self,
+        source_path: Path,
+        filename: str,
+        title_col: str,
+    ) -> pl.DataFrame:
+        return (
+            pl.read_csv(
+                self._resolve(source_path, filename),
+                columns=["icd_code", "icd_version", "long_title"],
+                schema_overrides={
+                    "icd_code": pl.Utf8,
+                    "icd_version": pl.Utf8,
+                    "long_title": pl.Utf8,
+                },
+                null_values=[""],
+            )
+            .drop_nulls("icd_code")
+            .rename({"icd_code": "raw_icd_code", "long_title": title_col})
+            .with_columns(pl.col(title_col).str.strip_chars().fill_null(""))
+        )
+
+    @staticmethod
+    def _code_title_expr(code_col: str, version_col: str, title_col: str) -> pl.Expr:
+        version = pl.lit("ICD-") + pl.col(version_col)
+        return (
+            pl.when(pl.col(title_col).is_not_null() & (pl.col(title_col) != ""))
+            .then(
+                pl.concat_str([
+                    version,
+                    pl.lit(" "),
+                    pl.col(code_col),
+                    pl.lit(" - "),
+                    pl.col(title_col),
+                ])
+            )
+            .otherwise(pl.concat_str([version, pl.lit(" "), pl.col(code_col)]))
         )
 
     def _read_prescriptions(self, source_path: Path) -> pl.DataFrame:

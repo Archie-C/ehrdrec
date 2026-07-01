@@ -11,7 +11,14 @@ from ehrdrec.models.dataclasses.data_loading import LoadedData
 
 logger = logging.getLogger(__name__)
 
-MIMIC3_FILES = ["ADMISSIONS.csv", "DIAGNOSES_ICD.csv", "PROCEDURES_ICD.csv", "PRESCRIPTIONS.csv"]
+MIMIC3_FILES = [
+    "ADMISSIONS.csv",
+    "DIAGNOSES_ICD.csv",
+    "PROCEDURES_ICD.csv",
+    "PRESCRIPTIONS.csv",
+    "D_ICD_DIAGNOSES.csv",
+    "D_ICD_PROCEDURES.csv",
+]
 
 class MIMIC3Loader(BaseLoader):
     def __init__(self, cache_dir: Path | None = None):
@@ -69,28 +76,54 @@ class MIMIC3Loader(BaseLoader):
     # ------------------------------------------------------------------
 
     def _load_source(self, source_path: Path) -> pl.LazyFrame:
-        # Read all four CSVs in parallel
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            f_admissions    = pool.submit(self._read_admissions,    source_path)
-            f_diagnoses     = pool.submit(self._read_codes,         source_path / "DIAGNOSES_ICD.csv")
-            f_procedures    = pool.submit(self._read_codes,         source_path / "PROCEDURES_ICD.csv")
+        # Read source CSVs in parallel.
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_admissions = pool.submit(self._read_admissions, source_path)
+            f_diagnoses = pool.submit(self._read_codes, source_path / "DIAGNOSES_ICD.csv")
+            f_procedures = pool.submit(self._read_codes, source_path / "PROCEDURES_ICD.csv")
+            f_diagnosis_names = pool.submit(
+                self._read_icd_dictionary,
+                source_path / "D_ICD_DIAGNOSES.csv",
+                "diagnosis_title",
+            )
+            f_procedure_names = pool.submit(
+                self._read_icd_dictionary,
+                source_path / "D_ICD_PROCEDURES.csv",
+                "procedure_title",
+            )
             f_prescriptions = pool.submit(self._read_prescriptions, source_path)
  
-            admissions    = f_admissions.result()
-            diagnoses     = f_diagnoses.result()
-            procedures    = f_procedures.result()
+            admissions = f_admissions.result()
+            diagnoses = f_diagnoses.result()
+            procedures = f_procedures.result()
+            diagnosis_names = f_diagnosis_names.result()
+            procedure_names = f_procedure_names.result()
             prescriptions = f_prescriptions.result()
  
         # Group diagnoses and procedures into List[Utf8] per admission
         diag_grouped = (
             diagnoses
+            .join(diagnosis_names, on="ICD9_CODE", how="left")
+            .with_columns(
+                self._code_title_expr("ICD9_CODE", "diagnosis_title").alias("diagnosis_terms")
+            )
             .group_by("HADM_ID")
-            .agg(pl.col("ICD9_CODE").alias("diagnoses"))
+            .agg([
+                pl.col("ICD9_CODE").alias("diagnoses"),
+                pl.col("diagnosis_terms"),
+            ])
         )
         proc_grouped = (
             procedures
+            .join(procedure_names, on="ICD9_CODE", how="left")
+            .with_columns(
+                self._code_title_expr("ICD9_CODE", "procedure_title").alias("procedure_terms")
+            )
             .group_by("HADM_ID")
-            .agg(pl.col("ICD9_CODE").alias("procedures"))
+            .agg([
+                pl.col("ICD9_CODE").alias("procedures"),
+                pl.col("procedure_terms"),
+            ])
         )
  
         # Group prescriptions into List[Struct] per admission
@@ -119,6 +152,8 @@ class MIMIC3Loader(BaseLoader):
             .with_columns([
                 pl.col("diagnoses").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
                 pl.col("procedures").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
+                pl.col("diagnosis_terms").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
+                pl.col("procedure_terms").fill_null(pl.lit([], dtype=pl.List(pl.Utf8))),
             ])
             .rename({
                 "SUBJECT_ID": "patient_id",
@@ -133,6 +168,8 @@ class MIMIC3Loader(BaseLoader):
                 "discharge_time",
                 "diagnoses",
                 "procedures",
+                "diagnosis_terms",
+                "procedure_terms",
                 "medications",
             ])
         )
@@ -179,6 +216,28 @@ class MIMIC3Loader(BaseLoader):
                 null_values=[""],
             )
             .drop_nulls("ICD9_CODE")
+        )
+
+    @staticmethod
+    def _read_icd_dictionary(path: Path, title_col: str) -> pl.DataFrame:
+        return (
+            pl.read_csv(
+                path,
+                columns=["ICD9_CODE", "LONG_TITLE"],
+                schema_overrides={"ICD9_CODE": pl.Utf8, "LONG_TITLE": pl.Utf8},
+                null_values=[""],
+            )
+            .drop_nulls("ICD9_CODE")
+            .rename({"LONG_TITLE": title_col})
+            .with_columns(pl.col(title_col).str.strip_chars().fill_null(""))
+        )
+
+    @staticmethod
+    def _code_title_expr(code_col: str, title_col: str) -> pl.Expr:
+        return (
+            pl.when(pl.col(title_col).is_not_null() & (pl.col(title_col) != ""))
+            .then(pl.concat_str([pl.col(code_col), pl.lit(" - "), pl.col(title_col)]))
+            .otherwise(pl.col(code_col))
         )
     
     @staticmethod

@@ -26,7 +26,7 @@ MIMIC3_PATH = "/home/cararc/data/mimic-iii-1.4"
 DDINTER_PATH = "data/ddinter2/mapping/ddinter_mapped_atc_codes.csv"
 
 ATC_LEVEL = 5
-LOOK_BACK = None
+LOOK_BACK = 3
 BATCH_SIZE = 1
 EPOCHS = 40
 LR = 0.002718469948721719

@@ -1,6 +1,6 @@
 from .base import Medication, ExtendedMedication
 from .data_loading import LoadedData
-from .data_processing import ProcessedData, ProcessedDataMultiHot
+from .data_processing import ProcessedData, ProcessedDataMultiHot, ProcessedEHRSequence
 from .experiment import ExperimentConfig
 from .training import TrainingResults
 from .evaluating import EvaluationResults
@@ -14,4 +14,5 @@ __all__ = [
     "ExperimentConfig",
     "TrainingResults",
     "EvaluationResults",
+    "ProcessedEHRSequence",
 ]

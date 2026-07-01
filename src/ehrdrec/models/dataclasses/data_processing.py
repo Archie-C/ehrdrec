@@ -27,3 +27,21 @@ class ProcessedDataMultiHot(ProcessedData):
     medications     : List[int]
     """
     pass
+
+@dataclass(slots=True)
+class ProcessedEHRSequence(ProcessedData):
+    """
+    Raw MIMIC-III data as a single flat LazyFrame, ready for downstream
+    Polars processing.
+ 
+    Schema
+    ------
+    patient_id      : int
+    admission_id    : int
+    admission_time  : datetime
+    discharge_time  : datetime
+    diagnoses       : List[int]
+    procedures      : List[int]
+    medications     : List[int]
+    """
+    pass

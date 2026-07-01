@@ -5,7 +5,7 @@ from .utils import seed_everything, save_run
 from .loading import MIMIC3Loader, MIMIC4Loader, BaseLoader
 
 # Processing
-from .processing import MultiHotProcessor, MultiHotProcessorAllATCs
+from .processing import MultiHotProcessor, MultiHotProcessorAllATCs, LLMCodeProcessor, EHRSequenceProcessor
 
 # Datasets
 from .datasets import (
@@ -15,10 +15,12 @@ from .datasets import (
     OriginalGAMENetDataset,
     collate_patient_visit_histories,
     collate_original_gamenet,
+    LLMCodeDataset,
+    collate_llm_code_examples,
 )
 
 # Models
-from .models import MLP, GameNetFast, FourSDrug, FastRx, Micron
+from .models import MLP, GameNetFast, FourSDrug, FastRx, Micron, HuggingFaceLLMRecommender, LLMGenerationConfig, parse_atc_codes
 
 # Data contracts
 from .models import (
@@ -27,6 +29,7 @@ from .models import (
     LoadedData,
     ProcessedData,
     ProcessedDataMultiHot,
+    ProcessedEHRSequence,
     ExperimentConfig,
     TrainingResults,
     EvaluationResults,
@@ -36,7 +39,7 @@ from .models import (
 from .training import Trainer, Tuner, StagedJepaTrainer, FreezeConfig, OriginalGAMENetTrainer
 
 # Evaluation
-from .evaluation import Evaluator
+from .evaluation import Evaluator, LLMEvaluator
 
 # Metrics
 from .metrics import F1, Jaccard, PRAUC, BinaryDDI, HighSeverityBinaryDDI
@@ -68,6 +71,8 @@ __all__ = [
     # Processing
     "MultiHotProcessor",
     "MultiHotProcessorAllATCs",
+    "LLMCodeProcessor",
+    "EHRSequenceProcessor",
     # Datasets
     "MultiHotDataset",
     "MultiHotDatasetWithPatientLookBack",
@@ -75,18 +80,24 @@ __all__ = [
     "OriginalGAMENetDataset",
     "collate_patient_visit_histories",
     "collate_original_gamenet",
+    "LLMCodeDataset",
+    "collate_llm_code_examples",
     # Models
     "MLP",
     "GameNetFast",
     "FourSDrug",
     "FastRx",
     "Micron",
+    "HuggingFaceLLMRecommender",
+    "LLMGenerationConfig",
+    "parse_atc_codes",
     # Data contracts
     "Medication",
     "ExtendedMedication",
     "LoadedData",
     "ProcessedData",
     "ProcessedDataMultiHot",
+    "ProcessedEHRSequence",
     "ExperimentConfig",
     "TrainingResults",
     "EvaluationResults",
@@ -98,6 +109,7 @@ __all__ = [
     "OriginalGAMENetTrainer",
     # Evaluation
     "Evaluator",
+    "LLMEvaluator",
     # Metrics
     "F1",
     "Jaccard",

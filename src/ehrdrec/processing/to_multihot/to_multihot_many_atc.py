@@ -588,7 +588,10 @@ class MultiHotProcessorAllATCs(BaseProcessor):
                 "atc4_ids",
                 "atc5_ids",
                 "medications",
-            ]
+                "diagnosis_terms",
+                "procedure_terms",
+            ],
+            strict=False,
         )
 
     def _split(

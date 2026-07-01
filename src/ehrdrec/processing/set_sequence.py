@@ -7,18 +7,17 @@ import polars as pl
 from platformdirs import user_cache_dir
 
 from ehrdrec.models.dataclasses.data_loading import LoadedData
-from ehrdrec.models.dataclasses.data_processing import ProcessedDataMultiHot
+from ehrdrec.models.dataclasses.data_processing import ProcessedEHRSequence
 from ehrdrec.processing.base import BaseProcessor
 from ehrdrec.mappings import NDCATCMapper, Vocab
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-
-class MultiHotProcessor(BaseProcessor):
-
-    PROCESSOR_VERSION = 3
-
+class SetSequenceProcessor(BaseProcessor):
+    
+    PROCESSOR_VERSION = 1
+    
     def __init__(self, cache_dir: Path | None = None):
         super().__init__()
         self.cache_dir = (
@@ -32,7 +31,7 @@ class MultiHotProcessor(BaseProcessor):
         self.medications_vocab = None
 
         logger.debug("Initialised; vocab attributes set to None")
-
+    
     def process(
         self,
         data: LoadedData,
@@ -43,7 +42,7 @@ class MultiHotProcessor(BaseProcessor):
         include_reserved: bool = True,
         force_reload: bool = False,
         atc_level: int | None = None,
-    ) -> ProcessedDataMultiHot:
+    ) -> ProcessedEHRSequence:
 
         cache_dir = self._cache_dir(
             data=data,
@@ -55,13 +54,13 @@ class MultiHotProcessor(BaseProcessor):
 
         if not force_reload and self._cache_exists(cache_dir):
             try:
-                logger.info("Loading MultiHotProcessor output from cache: %s", cache_dir)
+                logger.info("Loading EHRSequenceProcessor output from cache: %s", cache_dir)
                 self._load_vocabs(cache_dir)
 
-                return ProcessedDataMultiHot(
+                return ProcessedEHRSequence(
                     data_source=data.data_source,
                     dataset_name=data.dataset_name,
-                    processor_type="multi_hot",
+                    processor_type="ehr_sequence",
                     train_frame=pl.scan_parquet(cache_dir / "train.parquet"),
                     val_frame=pl.scan_parquet(cache_dir / "val.parquet"),
                     test_frame=pl.scan_parquet(cache_dir / "test.parquet"),
@@ -69,7 +68,7 @@ class MultiHotProcessor(BaseProcessor):
 
             except Exception:
                 logger.warning(
-                    "Failed to load MultiHotProcessor cache; rebuilding",
+                    "Failed to load EHRSequenceProcessor cache; rebuilding",
                     exc_info=True,
                 )
 
@@ -113,27 +112,14 @@ class MultiHotProcessor(BaseProcessor):
         val_data = self._convert_codes_to_integers(val_data)
         test_data = self._convert_codes_to_integers(test_data)
 
-        train_data = self._convert_to_multihot(
-            train_data,
-            include_reserved=include_reserved,
-        )
-        val_data = self._convert_to_multihot(
-            val_data,
-            include_reserved=include_reserved,
-        )
-        test_data = self._convert_to_multihot(
-            test_data,
-            include_reserved=include_reserved,
-        )
-
         self._write_cache(cache_dir, train_data, val_data, test_data)
 
         logger.info("Processing complete; cached output to: %s", cache_dir)
 
-        return ProcessedDataMultiHot(
+        return ProcessedEHRSequence(
             data_source=data.data_source,
             dataset_name=data.dataset_name,
-            processor_type="multi_hot",
+            processor_type="ehr_sequence",
             train_frame=pl.scan_parquet(cache_dir / "train.parquet"),
             val_frame=pl.scan_parquet(cache_dir / "val.parquet"),
             test_frame=pl.scan_parquet(cache_dir / "test.parquet"),
@@ -159,7 +145,7 @@ class MultiHotProcessor(BaseProcessor):
             mapping_file=mapping_file,
             include_reserved=include_reserved,
         )
-        return self.cache_dir / f"multi_hot_{key}"
+        return self.cache_dir / f"ehr_sequence_{key}"
 
     def _cache_key(
         self,
@@ -173,7 +159,7 @@ class MultiHotProcessor(BaseProcessor):
         mapping_path = Path(mapping_file)
 
         payload = {
-            "processor": "multi_hot",
+            "processor": "ehr_sequence",
             "processor_version": self.PROCESSOR_VERSION,
             "data_source": str(data.data_source),
             "dataset_name": data.dataset_name,
@@ -235,7 +221,7 @@ class MultiHotProcessor(BaseProcessor):
         self._save_vocabs(cache_dir)
 
         meta = {
-            "processor": "multi_hot",
+            "processor": "ehr_sequence",
             "processor_version": self.PROCESSOR_VERSION,
         }
 
@@ -368,34 +354,6 @@ class MultiHotProcessor(BaseProcessor):
             ]
         )
 
-    def _convert_to_multihot(
-        self,
-        data: pl.LazyFrame,
-        include_reserved: bool = True,
-    ) -> pl.LazyFrame:
-        # diagnosis_ids and procedure_ids are kept as sparse index lists to avoid
-        # storing ~25k and ~13k float vectors per row; dense expansion happens in the dataset.
-        data = data.with_columns(
-            self.medications_vocab.to_multihot_expr(
-                "atc_ids",
-                "medication_multihot",
-                include_reserved=include_reserved,
-            ),
-        )
-
-        return data.drop(
-            [
-                "diagnoses",
-                "procedures",
-                "atc_codes",
-                "atc_ids",
-                "medications",
-                "diagnosis_terms",
-                "procedure_terms",
-            ],
-            strict=False,
-        )
-
     def _split(
         self,
         data: pl.LazyFrame,
@@ -424,3 +382,4 @@ class MultiHotProcessor(BaseProcessor):
         test_lf = indexed.filter(pl.col("split_idx") >= val_end).drop("split_idx")
 
         return train_lf, val_lf, test_lf
+    

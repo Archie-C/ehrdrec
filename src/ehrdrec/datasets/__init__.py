@@ -1,6 +1,7 @@
 from .multi_hot import MultiHotDataset, MultiHotDatasetWithPatientLookBack, MultiHotDatasetWithAllATCLevels
 from .original_gamenet import OriginalGAMENetDataset, collate_original_gamenet
-from .llm_codes import LLMCodeDataset, collate_llm_code_examples
+from .mrdtr import MRDTRBatch, MRDTRDataset, build_mrdtr_graph, collate_mrdtr_examples
+from .shape import SHAPEDataset, collate_shape_examples
 from .utils import collate_patient_visit_histories
 
 __all__ = [
@@ -9,7 +10,11 @@ __all__ = [
     "MultiHotDatasetWithPatientLookBack",
     "MultiHotDatasetWithAllATCLevels",
     "OriginalGAMENetDataset",
-    "LLMCodeDataset",
     "collate_original_gamenet",
-    "collate_llm_code_examples",
+    "MRDTRBatch",
+    "MRDTRDataset",
+    "build_mrdtr_graph",
+    "collate_mrdtr_examples",
+    "SHAPEDataset",
+    "collate_shape_examples",
 ]

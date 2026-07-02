@@ -4,14 +4,15 @@ import torch
 from ehrdrec.mappings.code_to_id.vocab import Vocab
 
 def create_ehr_adjacency_matrix(
-    df: pl.DataFrame, 
-    medication_col: str = "medication_multihot"
+    df: pl.DataFrame,
+    medication_col: str = "medication_multihot",
+    n_medications: int | None = None,
 ) -> torch.Tensor:
-    med_matrix = torch.tensor(
+    med_matrix = _medication_rows_to_matrix(
         df[medication_col].to_list(),
-        dtype=torch.float32
+        n_medications=n_medications,
     )
-    
+
     unique_combinations = torch.unique(med_matrix, dim=0)
     
     A_b = unique_combinations.T
@@ -21,6 +22,41 @@ def create_ehr_adjacency_matrix(
     A_e.fill_diagonal_(0)
     
     return A_e
+
+
+def _medication_rows_to_matrix(
+    medication_rows: list,
+    *,
+    n_medications: int | None,
+) -> torch.Tensor:
+    if not medication_rows:
+        if n_medications is None:
+            return torch.empty((0, 0), dtype=torch.float32)
+        return torch.empty((0, n_medications), dtype=torch.float32)
+
+    if n_medications is None:
+        return torch.tensor(medication_rows, dtype=torch.float32)
+
+    med_matrix = torch.zeros(
+        (len(medication_rows), n_medications),
+        dtype=torch.float32,
+    )
+    for row_idx, medication_ids in enumerate(medication_rows):
+        if not medication_ids:
+            continue
+
+        ids = [int(idx) for idx in medication_ids]
+        max_id = max(ids)
+        if max_id >= n_medications:
+            raise ValueError(
+                "n_medications must be larger than the maximum medication id; "
+                f"got n_medications={n_medications}, max_id={max_id}."
+            )
+
+        med_matrix[row_idx, ids] = 1.0
+
+    return med_matrix
+
 
 def create_ddi_adjacency_matrix(
     medications_vocab: Vocab,

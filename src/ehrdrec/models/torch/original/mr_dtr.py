@@ -58,7 +58,7 @@ class GCN(torch.nn.Module):
         normalized_ddi_adj = self.normalize(ddi_adjacency_matrix + torch.eye(ehr_adjacency_matrix.shape[0]))
 
         self.ehr_adj = torch.FloatTensor(normalized_ehr_adj).to(device)
-        self.ddi_adj = torch.FloatTensor(normalized_ddi_adj).to(device)
+        self.ddi_adjacency_matrix = torch.FloatTensor(normalized_ddi_adj).to(device)
         self.identity_features = torch.eye(vocab_size).to(device)
 
         self.shared_input_layer = GraphConvolution(vocab_size, embedding_dim)
@@ -68,7 +68,7 @@ class GCN(torch.nn.Module):
 
     def forward(self):
         ehr_node_embedding = self.shared_input_layer(self.identity_features, self.ehr_adj)
-        ddi_node_embedding = self.shared_input_layer(self.identity_features, self.ddi_adj)
+        ddi_node_embedding = self.shared_input_layer(self.identity_features, self.ddi_adjacency_matrix)
 
         ehr_node_embedding = F.relu(ehr_node_embedding)
         ddi_node_embedding = F.relu(ddi_node_embedding)
@@ -76,7 +76,7 @@ class GCN(torch.nn.Module):
         ddi_node_embedding = self.dropout(ddi_node_embedding)
 
         ehr_node_embedding = self.ehr_output_layer(ehr_node_embedding, self.ehr_adj)
-        ddi_node_embedding = self.ddi_output_layer(ddi_node_embedding, self.ddi_adj)
+        ddi_node_embedding = self.ddi_output_layer(ddi_node_embedding, self.ddi_adjacency_matrix)
         return ehr_node_embedding, ddi_node_embedding
 
     def normalize(self, adjacency_matrix):
@@ -214,9 +214,27 @@ class MRDTR(nn.Module):
         self.temporal_attention_dropout_layer = nn.Dropout(p=self.temporal_attention_dropout_rate)
         
         self.num_attention_heads = 2
-        self.diagnosis_transformer_encoder = nn.TransformerEncoder(self.embedding_dim, self.num_attention_heads, batch_first=True, dropout=0.2)
-        self.procedure_transformer_encoder = nn.TransformerEncoder(self.embedding_dim, self.num_attention_heads, batch_first=True, dropout=0.2)
-        
+        diagnosis_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.embedding_dim,
+            nhead=self.num_attention_heads,
+            batch_first=True,
+            dropout=0.2,
+        )
+        procedure_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.embedding_dim,
+            nhead=self.num_attention_heads,
+            batch_first=True,
+            dropout=0.2,
+        )
+        self.diagnosis_transformer_encoder = nn.TransformerEncoder(
+            diagnosis_encoder_layer,
+            num_layers=1,
+        )
+        self.procedure_transformer_encoder = nn.TransformerEncoder(
+            procedure_encoder_layer,
+            num_layers=1,
+        )
+
         self.periodic_time_encoder = PeriodicTimeEncoder(embedding_dim=self.embedding_dim)
         
         self.neighbor_context_projection = nn.Linear(self.hop_num * self.embedding_dim, self.embedding_dim)
@@ -255,11 +273,23 @@ class MRDTR(nn.Module):
         
         hop_context_embeddings = []
         
-        diagnosis_features = [torch.sum(self.diagnosis_embedding(torch.LongTensor(i).to(self.device)), dim=0) for i in diagnosis_code_lists]
-        procedure_features = [torch.sum(self.procedure_embedding(torch.LongTensor(i).to(self.device)), dim=0) for i in procedure_code_lists]
-        diagnosis_features = diagnosis_features[:, -1, :]
-        procedure_features = procedure_features[:, -1, :]
-        
+        diagnosis_features = torch.stack([
+            torch.sum(
+                self.diagnosis_embedding(torch.LongTensor(ids).to(self.device)),
+                dim=0,
+            )
+            for ids in diagnosis_code_lists
+        ])
+        procedure_features = torch.stack([
+            torch.sum(
+                self.procedure_embedding(torch.LongTensor(ids).to(self.device)),
+                dim=0,
+            )
+            for ids in procedure_code_lists
+        ])
+        diagnosis_features = diagnosis_features[-1]
+        procedure_features = procedure_features[-1]
+
         patient_context = torch.cat([diagnosis_features, procedure_features], dim=-1)
         patient_context = self.patient_projection(patient_context)
         patient_context = patient_context * query_embeddings
@@ -294,7 +324,7 @@ class MRDTR(nn.Module):
             
             hop_temporal_embeddings = self.periodic_time_encoder(torch.Tensor([current_hop_temporal_features]).unsqueeze(dim=-1).to(self.device))
             
-            temporal_attention = torch.einsum('bin,bnf->bin', torch.stack([central_node_temporal_embedding for _ in range(self.n_medications)], dim=1), hop_temporal_embeddings)
+            temporal_attention = torch.einsum('bif,bnf->bin', torch.stack([central_node_temporal_embedding for _ in range(self.n_medications)], dim=1), hop_temporal_embeddings)
             temporal_attention = self.temporal_attention_dropout_layer(temporal_attention)
             
             
@@ -305,7 +335,11 @@ class MRDTR(nn.Module):
         medication_logits = self.output_projection(combined_context).t()
         negative_prediction_probabilities = torch.sigmoid(medication_logits)
         negative_prediction_probabilities = torch.matmul(negative_prediction_probabilities.t(), negative_prediction_probabilities)
-        ddi_loss = 0.0005 * negative_prediction_probabilities.mul(self.ddi_adj).sum()
+        ddi_adjacency_matrix = self.ddi_adjacency_matrix.to(
+            device=negative_prediction_probabilities.device,
+            dtype=negative_prediction_probabilities.dtype,
+        )
+        ddi_loss = 0.0005 * negative_prediction_probabilities.mul(ddi_adjacency_matrix).sum()
         return {
             "predictions": medication_logits,
             "losses" : {

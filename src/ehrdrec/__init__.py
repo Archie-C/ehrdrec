@@ -5,7 +5,7 @@ from .utils import seed_everything, save_run
 from .loading import MIMIC3Loader, MIMIC4Loader, BaseLoader
 
 # Processing
-from .processing import MultiHotProcessor, MultiHotProcessorAllATCs, LLMCodeProcessor, EHRSequenceProcessor
+from .processing import MultiHotProcessor, MultiHotProcessorAllATCs, SetSequenceProcessor
 
 # Datasets
 from .datasets import (
@@ -15,12 +15,14 @@ from .datasets import (
     OriginalGAMENetDataset,
     collate_patient_visit_histories,
     collate_original_gamenet,
-    LLMCodeDataset,
-    collate_llm_code_examples,
+    MRDTRBatch,
+    MRDTRDataset,
+    build_mrdtr_graph,
+    collate_mrdtr_examples,
 )
 
 # Models
-from .models import MLP, GameNetFast, FourSDrug, FastRx, Micron, HuggingFaceLLMRecommender, LLMGenerationConfig, parse_atc_codes
+from .models import MLP, GameNetFast, FourSDrug, FastRx, Micron
 
 # Data contracts
 from .models import (
@@ -71,8 +73,7 @@ __all__ = [
     # Processing
     "MultiHotProcessor",
     "MultiHotProcessorAllATCs",
-    "LLMCodeProcessor",
-    "EHRSequenceProcessor",
+    "SetSequenceProcessor",
     # Datasets
     "MultiHotDataset",
     "MultiHotDatasetWithPatientLookBack",
@@ -80,17 +81,16 @@ __all__ = [
     "OriginalGAMENetDataset",
     "collate_patient_visit_histories",
     "collate_original_gamenet",
-    "LLMCodeDataset",
-    "collate_llm_code_examples",
+    "MRDTRBatch",
+    "MRDTRDataset",
+    "build_mrdtr_graph",
+    "collate_mrdtr_examples",
     # Models
     "MLP",
     "GameNetFast",
     "FourSDrug",
     "FastRx",
     "Micron",
-    "HuggingFaceLLMRecommender",
-    "LLMGenerationConfig",
-    "parse_atc_codes",
     # Data contracts
     "Medication",
     "ExtendedMedication",

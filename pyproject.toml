@@ -32,3 +32,9 @@ classifiers = [
 # TensorBoardLogger imports this lazily; not needed unless you use it.
 [project.optional-dependencies]
 tensorboard = ["tensorboard>=2.18.0"]
+llm = ["transformers", "accelerate"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+]

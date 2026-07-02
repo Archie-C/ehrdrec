@@ -24,12 +24,13 @@ class Tuner:
         study_name: str | None = None,
         storage: str | None = None,
         callbacks: list[Callable[[optuna.Study, optuna.trial.FrozenTrial], None]] | None = None,
+        seed: int | None = None,
     ):
         self.trial_fn = trial_fn
         self.n_trials = n_trials
         self.direction = direction
         self.pruner = pruner or optuna.pruners.MedianPruner()
-        self.sampler = sampler
+        self.sampler = sampler or (optuna.samplers.TPESampler(seed=seed) if seed is not None else None)
         self.study_name = study_name
         self.storage = storage
         self.callbacks = callbacks

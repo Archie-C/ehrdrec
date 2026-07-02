@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 
 from ehrdrec.datasets import MultiHotDatasetWithPatientLookBack, collate_patient_visit_histories
 from ehrdrec.evaluation import Evaluator
-from ehrdrec.loading import MIMIC4Loader
+from ehrdrec.loading import MIMIC4Loader, MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
 from ehrdrec.models import GameNetFast
@@ -28,8 +28,8 @@ FINAL_EPOCHS = 40
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    loader = MIMIC4Loader()
-    data = loader.load("/home/cararc/data/mimic-iv-3.1/hosp")
+    loader = MIMIC3Loader()
+    data = loader.load("/home/cararc/data/mimic-iii-1.4")
     processor = MultiHotProcessor()
     processed_data = processor.process(data, minimum_admissions=2, atc_level=ATC_LEVEL, force_reload=True)
 

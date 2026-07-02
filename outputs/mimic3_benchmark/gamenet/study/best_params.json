@@ -1,0 +1,10 @@
+{
+  "trial_number": 10,
+  "value": 0.4154786586017484,
+  "params": {
+    "lr": 0.002718469948721719,
+    "embedding_dim": 256,
+    "hidden_dim": 256,
+    "query_dim": 128
+  }
+}

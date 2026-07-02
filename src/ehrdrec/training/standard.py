@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from ehrdrec.models.dataclasses import TrainingResults
 from ehrdrec.training import BaseTrainer
 from ehrdrec.training.logging import TrainerLogger
+from ehrdrec.utils.seeding import seed_everything
 
 if TYPE_CHECKING:
     import optuna
@@ -28,6 +29,7 @@ class Trainer(BaseTrainer):
         epochs: int = 10,
         logger: TrainerLogger | None = None,
         trial: "optuna.Trial | None" = None,
+        seed: int | None = None,
     ):
         super().__init__(
             model=model,
@@ -43,9 +45,13 @@ class Trainer(BaseTrainer):
             logger=logger,
         )
         self.trial = trial
+        self.seed = seed
     
     def fit(self) -> TrainingResults:
         import optuna
+
+        if self.seed is not None:
+            seed_everything(self.seed)
 
         best_val_score = None
         best_model_state = copy.deepcopy(self.model.state_dict())
@@ -55,11 +61,13 @@ class Trainer(BaseTrainer):
 
         final_train_loss = None
         final_val_score = None
+        history: list[dict] = []
 
         for epoch in range(1, self.epochs + 1):
             train_loss, train_metrics = self._train_one_epoch()
 
             final_train_loss = train_loss
+            val_metrics: dict[str, float] = {}
 
             if self.val_loader is not None:
                 val_metrics = self._validate()
@@ -94,6 +102,13 @@ class Trainer(BaseTrainer):
                     if self.logger is not None:
                         self.logger.on_best_model(epoch, None, best_model_state)
 
+            history.append({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train": train_metrics,
+                "val": val_metrics,
+            })
+
             if self.logger is not None:
                 self.logger.on_epoch_end(epoch, train_metrics, val_metrics)
 
@@ -105,6 +120,8 @@ class Trainer(BaseTrainer):
             best_train_metrics=best_train_metrics,
             best_val_metrics=best_val_metrics,
             best_epoch=best_epoch,
+            seed=self.seed,
+            history=history,
         )
 
     def _train_one_epoch(self) -> tuple[float, dict[str, float]]:

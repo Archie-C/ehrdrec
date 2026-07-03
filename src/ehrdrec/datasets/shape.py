@@ -13,9 +13,11 @@ class SHAPEDataset(Dataset):
     """
     Dataset adapter for the original SHAPE implementation.
 
-    Each item is one patient sequence. Use collate_shape_examples to pad patient
-    sequences and per-visit code lists into the batched tensors expected by
-    SHAPE.forward.
+    By default, each item is one full patient sequence. With
+    sample_all_visits=True, each item is one eligible target visit plus its
+    preceding history, which is useful for visit-level model comparisons. Use
+    collate_shape_examples to pad patient sequences and per-visit code lists
+    into the batched tensors expected by SHAPE.forward.
     """
 
     def __init__(
@@ -32,6 +34,8 @@ class SHAPEDataset(Dataset):
         medication_col: str = "atc_ids",
         medication_is_multihot: bool = False,
         min_visits: int = 1,
+        sample_all_visits: bool = False,
+        look_back: int | None = None,
         mask_value: float = -1e9,
         dtype: torch.dtype = torch.float32,
     ) -> None:
@@ -46,23 +50,45 @@ class SHAPEDataset(Dataset):
         self.medication_col = medication_col
         self.medication_is_multihot = medication_is_multihot
         self.min_visits = min_visits
+        self.sample_all_visits = sample_all_visits
+        self.look_back = look_back
         self.mask_value = mask_value
         self.dtype = dtype
 
-        self.patient_frames = [
-            patient_df
-            for _, patient_df in self.frame.group_by(
-                patient_id_col,
-                maintain_order=True,
-            )
-            if patient_df.height >= min_visits
-        ]
+        self.patient_frames = []
+        self.samples = []
+        for _, patient_df in self.frame.group_by(
+            patient_id_col,
+            maintain_order=True,
+        ):
+            if patient_df.height < min_visits:
+                continue
+
+            if sample_all_visits:
+                for visit_idx in range(min_visits - 1, patient_df.height):
+                    start_idx = 0 if look_back is None else max(0, visit_idx - look_back + 1)
+                    self.samples.append(
+                        {
+                            "patient_df": patient_df,
+                            "start_idx": start_idx,
+                            "end_idx": visit_idx + 1,
+                        }
+                    )
+            else:
+                self.patient_frames.append(patient_df)
 
     def __len__(self) -> int:
-        return len(self.patient_frames)
+        return len(self.samples) if self.sample_all_visits else len(self.patient_frames)
 
     def __getitem__(self, idx: int):
-        patient_df = self.patient_frames[idx]
+        if self.sample_all_visits:
+            sample = self.samples[idx]
+            patient_df = sample["patient_df"].slice(
+                sample["start_idx"],
+                sample["end_idx"] - sample["start_idx"],
+            )
+        else:
+            patient_df = self.patient_frames[idx]
 
         diagnosis_lists: list[list[int]] = []
         procedure_lists: list[list[int]] = []

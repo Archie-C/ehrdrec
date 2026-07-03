@@ -33,6 +33,7 @@ classifiers = [
 [project.optional-dependencies]
 tensorboard = ["tensorboard>=2.18.0"]
 llm = ["transformers", "accelerate"]
+wandb = ["wandb>=0.17.0"]
 
 [dependency-groups]
 dev = [

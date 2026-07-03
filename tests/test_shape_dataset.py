@@ -41,6 +41,30 @@ def test_shape_dataset_returns_one_sorted_patient_sequence():
     assert target[1].sum().item() == 0.0
 
 
+
+def test_shape_dataset_can_sample_all_visit_level_histories():
+    dataset = SHAPEDataset(
+        _shape_df(),
+        n_diagnoses=12,
+        n_procedures=12,
+        n_medications=6,
+        time_col="time",
+        min_visits=2,
+        sample_all_visits=True,
+    )
+
+    assert len(dataset) == 2
+
+    first_features, first_targets = dataset[0]
+    second_features, second_targets = dataset[1]
+
+    assert first_features["diseases"] == [[2, 3], [5]]
+    assert first_targets.shape == (2, 6)
+    assert first_targets[-1].sum().item() == 0.0
+
+    assert second_features["diseases"] == [[2, 3], [5], [4]]
+    assert second_targets[-1].tolist() == [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
 def test_collate_shape_examples_pads_codes_visits_and_masks():
     dataset = SHAPEDataset(
         _shape_df(),

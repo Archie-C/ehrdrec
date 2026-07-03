@@ -22,7 +22,11 @@ from .datasets import (
 )
 
 # Models
-from .models import MLP, GameNetFast, FourSDrug, FastRx, Micron
+from . import models as _models
+
+for _model_name in ("MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron"):
+    if hasattr(_models, _model_name):
+        globals()[_model_name] = getattr(_models, _model_name)
 
 # Data contracts
 from .models import (
@@ -86,11 +90,7 @@ __all__ = [
     "build_mrdtr_graph",
     "collate_mrdtr_examples",
     # Models
-    "MLP",
-    "GameNetFast",
-    "FourSDrug",
-    "FastRx",
-    "Micron",
+    # Optional torch models
     # Data contracts
     "Medication",
     "ExtendedMedication",
@@ -130,3 +130,9 @@ __all__ = [
     "MappingStoreError",
     "MappingNotFoundError",
 ]
+
+__all__.extend(
+    name
+    for name in ["MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron"]
+    if name in globals()
+)

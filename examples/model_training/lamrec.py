@@ -1,18 +1,18 @@
 import logging
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from ehrdrec.datasets import SHAPEDataset, collate_shape_examples
 from ehrdrec.evaluation import Evaluator
 from ehrdrec.loading import MIMIC3Loader
-from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
+from ehrdrec.metrics import BinaryDDI, F1, Jaccard, PRAUC
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
-from ehrdrec.models.torch.original.shape import SHAPE
-from ehrdrec.models.utils import create_ddi_adjacency_matrix, create_ehr_adjacency_matrix
+from ehrdrec.models.torch.original.LAMRec import LAMRec
+from ehrdrec.models.utils import create_ddi_adjacency_matrix
 from ehrdrec.processing import SetSequenceProcessor
 from ehrdrec.training import CheckpointLogger, CompositeLogger, TqdmLogger, Trainer
-from ehrdrec.training.losses import OriginalGAMENetLoss
 
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
@@ -26,14 +26,55 @@ BATCH_SIZE = 8
 EPOCHS = 40
 LR = 1e-3
 EMB_DIM = 128
-HIDDEN_DIM = 128
-DDI_WEIGHT = 0.05
+N_HEADS = 4
+NUM_LAYERS = 2
+FEEDFORWARD_DIM = 128
+TEMPERATURE = 0.07
+DDI_WEIGHT = 0.5
+MULTIVIEW_WEIGHT = 0.5
 SEED = 42
 LOOK_BACK = None
 MIN_VISITS = 2
+DDI_THRESHOLD = 0.06
 
 
-def set_seed(seed: int):
+class LAMRecTrainingAdapter(nn.Module):
+    """Adapts SHAPEDataset batches to the original LAMRec input contract."""
+
+    def __init__(self, model: LAMRec) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, features):
+        return self.model(
+            {
+                "diagnoses": features["diseases"],
+                "procedures": features["procedures"],
+            }
+        )
+
+
+class LAMRecLoss(nn.Module):
+    def __init__(self, ddi_weight: float = 0.5, multiview_weight: float = 0.5) -> None:
+        super().__init__()
+        self.ddi_weight = ddi_weight
+        self.multiview_weight = multiview_weight
+        self.bce_loss = nn.BCEWithLogitsLoss()
+
+    def forward(self, predictions, targets, model_output=None, features=None, losses=None, **kwargs):
+        loss = self.bce_loss(predictions, targets)
+        if losses is None:
+            return loss
+
+        if "ddi_loss" in losses:
+            loss = loss + self.ddi_weight * losses["ddi_loss"].to(predictions.device)
+        if "multiview_loss" in losses:
+            loss = loss + self.multiview_weight * losses["multiview_loss"].to(predictions.device)
+
+        return loss
+
+
+def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -41,18 +82,50 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def build_shape_model(ehr_adj, ddi_adj, n_diagnoses, n_procedures, n_medications, device):
-    return SHAPE(
+def make_metrics(medications_vocab, n_medications: int, device: torch.device) -> list:
+    return [
+        Jaccard(),
+        F1(),
+        PRAUC(),
+        BinaryDDI(
+            medications_vocab=medications_vocab,
+            ddinter_path=DDINTER_PATH,
+            n_medications=n_medications,
+            atc_level=ATC_LEVEL,
+            device=device,
+        ),
+        HighSeverityBinaryDDI(
+            medications_vocab=medications_vocab,
+            ddinter_path=DDINTER_PATH,
+            n_medications=n_medications,
+            atc_level=ATC_LEVEL,
+            device=device,
+        ),
+    ]
+
+
+def build_lamrec_model(
+    *,
+    n_diagnoses: int,
+    n_procedures: int,
+    n_medications: int,
+    ddi_adj: torch.Tensor,
+) -> LAMRecTrainingAdapter:
+    lamrec = LAMRec(
         n_diagnoses=n_diagnoses,
         n_procedures=n_procedures,
         n_medications=n_medications,
-        ehr_adjacency_matrix=ehr_adj.float().cpu().numpy(),
-        ddi_adjacency_matrix=ddi_adj.float().cpu().numpy(),
-        ddi_mask_H=ddi_adj.float().cpu().numpy(),
+        ddi_adjacency_matrix=ddi_adj,
         embedding_dim=EMB_DIM,
-        hidden_dim=HIDDEN_DIM,
-        device=device,
-    ).to(device)
+        alpha=DDI_WEIGHT,
+        beta=MULTIVIEW_WEIGHT,
+        number_of_heads=N_HEADS,
+        num_layers=NUM_LAYERS,
+        feedforward_dim=FEEDFORWARD_DIM,
+        temperature=TEMPERATURE,
+        ddi_threshold=DDI_THRESHOLD,
+    )
+    return LAMRecTrainingAdapter(lamrec)
 
 
 if __name__ == "__main__":
@@ -87,7 +160,6 @@ if __name__ == "__main__":
         diagnosis_col="diagnosis_ids",
         procedure_col="procedure_ids",
         medication_col="atc_ids",
-        medication_is_multihot=False,
         min_visits=MIN_VISITS,
         sample_all_visits=True,
         look_back=LOOK_BACK,
@@ -105,18 +177,13 @@ if __name__ == "__main__":
         f"medications={n_medications}",
     )
 
-    ehr_adj = create_ehr_adjacency_matrix(
-        train_frame,
-        medication_col="atc_ids",
-        n_medications=n_medications,
-    )
     ddi_adj = create_ddi_adjacency_matrix(
         medications_vocab=processor.medications_vocab,
         ddinter_path=DDINTER_PATH,
         n_medications=n_medications,
         atc_level=ATC_LEVEL,
     )
-    print(f"EHR adj: {ehr_adj.shape}, DDI adj: {ddi_adj.shape}")
+    print(f"DDI adj: {ddi_adj.shape}")
 
     train_loader = DataLoader(
         train_dataset,
@@ -137,40 +204,18 @@ if __name__ == "__main__":
         collate_fn=collate_shape_examples,
     )
 
-    model = build_shape_model(
-        ehr_adj=ehr_adj,
-        ddi_adj=ddi_adj,
+    model = build_lamrec_model(
         n_diagnoses=n_diagnoses,
         n_procedures=n_procedures,
         n_medications=n_medications,
-        device=device,
+        ddi_adj=ddi_adj,
     )
-
-    metrics = [
-        Jaccard(),
-        F1(),
-        PRAUC(),
-        BinaryDDI(
-            medications_vocab=processor.medications_vocab,
-            ddinter_path=DDINTER_PATH,
-            n_medications=n_medications,
-            atc_level=ATC_LEVEL,
-            device=device,
-        ),
-        HighSeverityBinaryDDI(
-            medications_vocab=processor.medications_vocab,
-            ddinter_path=DDINTER_PATH,
-            n_medications=n_medications,
-            atc_level=ATC_LEVEL,
-            device=device,
-        ),
-    ]
 
     logger = CompositeLogger(
         [
-            TqdmLogger(epochs=EPOCHS, metrics=["Jaccard"], desc="SHAPE"),
+            TqdmLogger(epochs=EPOCHS, metrics=["Jaccard"], desc="LAMRec"),
             CheckpointLogger(
-                checkpoint_dir="checkpoints/shape",
+                checkpoint_dir="checkpoints/lamrec",
                 keep_last=True,
             ),
         ]
@@ -180,9 +225,9 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=OriginalGAMENetLoss(ddi_weight=DDI_WEIGHT),
+        loss_fn=LAMRecLoss(ddi_weight=DDI_WEIGHT, multiview_weight=MULTIVIEW_WEIGHT),
         optimizer=torch.optim.Adam(model.parameters(), lr=LR),
-        metrics=metrics,
+        metrics=make_metrics(processor.medications_vocab, n_medications, device),
         target_metric="Jaccard",
         higher_is_better=True,
         device=device,
@@ -202,7 +247,7 @@ if __name__ == "__main__":
     eval_results = Evaluator(
         model=model,
         test_loader=test_loader,
-        metrics=metrics,
+        metrics=make_metrics(processor.medications_vocab, n_medications, device),
         device=device,
     ).run()
 

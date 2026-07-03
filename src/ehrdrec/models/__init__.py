@@ -1,9 +1,18 @@
-from .torch.mlp import MLP
-from .torch.GAMENet import GameNetFast
-from .torch.foursdrug import FourSDrug
-from .torch.FastRx import FastRx
-from .torch.micron import Micron
-from .torch.original.mr_dtr import MRDTR
+from contextlib import suppress
+
+with suppress(ModuleNotFoundError):
+    from .torch.mlp import MLP
+with suppress(ModuleNotFoundError):
+    from .torch.GAMENet import GameNetFast
+with suppress(ModuleNotFoundError):
+    from .torch.foursdrug import FourSDrug
+with suppress(ModuleNotFoundError):
+    from .torch.FastRx import FastRx
+with suppress(ModuleNotFoundError):
+    from .torch.micron import Micron
+with suppress(ModuleNotFoundError):
+    from .torch.original.mr_dtr import MRDTR
+
 from .dataclasses import (
     Medication,
     ExtendedMedication,
@@ -17,19 +26,23 @@ from .dataclasses import (
 )
 
 __all__ = [
-    "MLP",
-    "GameNetFast",
-    "FourSDrug",
-    "FastRx",
-    "Micron",
-    "Medication",
-    "ExtendedMedication",
-    "LoadedData",
-    "ProcessedData",
-    "ProcessedDataMultiHot",
-    "ProcessedEHRSequence",
-    "ExperimentConfig",
-    "TrainingResults",
-    "EvaluationResults",
-    "MRDTR",
+    name
+    for name in [
+        "MLP",
+        "GameNetFast",
+        "FourSDrug",
+        "FastRx",
+        "Micron",
+        "Medication",
+        "ExtendedMedication",
+        "LoadedData",
+        "ProcessedData",
+        "ProcessedDataMultiHot",
+        "ProcessedEHRSequence",
+        "ExperimentConfig",
+        "TrainingResults",
+        "EvaluationResults",
+        "MRDTR",
+    ]
+    if name in globals()
 ]

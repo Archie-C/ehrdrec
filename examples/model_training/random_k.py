@@ -1,4 +1,5 @@
 import logging
+import re
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from ehrdrec.loading import MIMIC3Loader
 from ehrdrec.metrics import F1, Jaccard, PRAUC, BinaryDDI
 from ehrdrec.metrics.ddi import HighSeverityBinaryDDI
 from ehrdrec.processing import MultiHotProcessor
+from ehrdrec.training import WandbLogger
 
 
 logging.getLogger("ehrdrec").setLevel(logging.INFO)
@@ -20,8 +22,11 @@ DDINTER_PATH = "data/ddinter2/mapping/ddinter_mapped_atc_codes.csv"
 
 ATC_LEVEL = 5
 BATCH_SIZE = 256
-K = 20
+K_VALUES = [5, 10, 20, 40, 80]
 SEED = 42
+WANDB_PROJECT = "ehrdrec"
+WANDB_GROUP = "random-k"
+TARGET_METRIC = "Jaccard"
 
 
 class RandomKMedicationPredictor(nn.Module):
@@ -69,6 +74,32 @@ class RandomKMedicationPredictor(nn.Module):
         return logits
 
 
+def make_metrics(medications_vocab, n_medications: int, device: torch.device) -> list:
+    return [
+        Jaccard(),
+        F1(),
+        PRAUC(),
+        BinaryDDI(
+            medications_vocab=medications_vocab,
+            ddinter_path=DDINTER_PATH,
+            n_medications=n_medications,
+            atc_level=ATC_LEVEL,
+            device=device,
+        ),
+        HighSeverityBinaryDDI(
+            medications_vocab=medications_vocab,
+            ddinter_path=DDINTER_PATH,
+            n_medications=n_medications,
+            atc_level=ATC_LEVEL,
+            device=device,
+        ),
+    ]
+
+
+def prefixed_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    return {f"{prefix}_{re.sub(r'[^0-9a-zA-Z_]', '_', name)}": value for name, value in metrics.items()}
+
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -97,46 +128,62 @@ if __name__ == "__main__":
 
     _, sample_target = val_dataset[0]
     n_medications = sample_target.shape[0]
-    print(f"Random-{K} baseline over {n_medications} medications")
+    print(f"Random-k baseline over {n_medications} medications: {K_VALUES}")
 
-    model = RandomKMedicationPredictor(
-        n_medications=n_medications,
-        k=K,
-        seed=SEED,
-    ).to(device)
-
-    metrics = [
-        Jaccard(),
-        F1(),
-        PRAUC(),
-        BinaryDDI(
-            medications_vocab=medications_vocab,
-            ddinter_path=DDINTER_PATH,
+    for k in K_VALUES:
+        model = RandomKMedicationPredictor(
             n_medications=n_medications,
-            atc_level=ATC_LEVEL,
-            device=device,
-        ),
-        HighSeverityBinaryDDI(
-            medications_vocab=medications_vocab,
-            ddinter_path=DDINTER_PATH,
-            n_medications=n_medications,
-            atc_level=ATC_LEVEL,
-            device=device,
-        ),
-    ]
+            k=k,
+            seed=SEED,
+        ).to(device)
+        effective_k = model.k
+        print(f"Evaluating random-{effective_k} baseline")
 
-    val_results = Evaluator(
-        model=model,
-        test_loader=DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False),
-        metrics=metrics,
-        device=device,
-    ).run()
-    print("Validation metrics:", val_results.test_metrics)
+        logger = WandbLogger(
+            project=WANDB_PROJECT,
+            name=f"random-k-{effective_k}",
+            config={
+                "model": "RandomKMedicationPredictor",
+                "requested_k": k,
+                "effective_k": effective_k,
+                "seed": SEED,
+                "atc_level": ATC_LEVEL,
+                "batch_size": BATCH_SIZE,
+                "target_metric": TARGET_METRIC,
+            },
+            tags=["baseline", "random-k"],
+            group=WANDB_GROUP,
+        )
 
-    test_results = Evaluator(
-        model=model,
-        test_loader=DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False),
-        metrics=metrics,
-        device=device,
-    ).run()
-    print("Test metrics:", test_results.test_metrics)
+        try:
+            val_results = Evaluator(
+                model=model,
+                test_loader=DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False),
+                metrics=make_metrics(medications_vocab, n_medications, device),
+                device=device,
+            ).run()
+            print(f"Validation metrics for k={effective_k}:", val_results.test_metrics)
+
+            test_results = Evaluator(
+                model=model,
+                test_loader=DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False),
+                metrics=make_metrics(medications_vocab, n_medications, device),
+                device=device,
+            ).run()
+            print(f"Test metrics for k={effective_k}:", test_results.test_metrics)
+
+            logger.log(
+                {
+                    "k": effective_k,
+                    **prefixed_metrics("validation", val_results.test_metrics),
+                    **prefixed_metrics("test", test_results.test_metrics),
+                },
+                step=effective_k,
+            )
+            logger.on_best_model(
+                epoch=effective_k,
+                score=test_results.test_metrics.get(TARGET_METRIC),
+                state_dict={},
+            )
+        finally:
+            logger.close()

@@ -1,7 +1,7 @@
 import logging
-import os
+import re
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 from tqdm.auto import tqdm
@@ -119,6 +119,81 @@ class TensorBoardLogger:
     def close(self) -> None:
         if self._writer is not None:
             self._writer.close()
+
+
+class WandbLogger:
+    """Logs training metrics and best-score summaries to Weights & Biases.
+
+    Requires the optional wandb dependency. The run is created lazily by
+    importing W&B only when this logger is constructed.
+    """
+
+    def __init__(
+        self,
+        project: str | None = None,
+        *,
+        entity: str | None = None,
+        name: str | None = None,
+        config: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        mode: str | None = None,
+        **init_kwargs: Any,
+    ) -> None:
+        try:
+            import wandb
+        except ImportError as exc:
+            raise ImportError(
+                "WandbLogger requires the optional wandb dependency. "
+                "Install it with the wandb optional dependency or with wandb directly."
+            ) from exc
+
+        self._run = wandb.init(
+            project=project,
+            entity=entity,
+            name=name,
+            config=config,
+            tags=tags,
+            mode=mode,
+            **init_kwargs,
+        )
+
+    def log(self, metrics: dict[str, float | int], step: int | None = None) -> None:
+        self._run.log(metrics, step=step)
+
+    @staticmethod
+    def _metric_key(prefix: str, name: str) -> str:
+        key = re.sub(r"[^0-9a-zA-Z_]", "_", name)
+        if not key or key[0].isdigit():
+            key = f"metric_{key}"
+        return f"{prefix}_{key}"
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        train_metrics: dict[str, float],
+        val_metrics: dict[str, float] | None,
+    ) -> None:
+        payload = {"epoch": epoch}
+        payload.update({self._metric_key("train", k): v for k, v in train_metrics.items()})
+        if val_metrics:
+            payload.update({self._metric_key("val", k): v for k, v in val_metrics.items()})
+        self._run.log(payload, step=epoch)
+
+    def on_best_model(
+        self,
+        epoch: int,
+        score: float | None,
+        state_dict: dict,
+    ) -> None:
+        payload: dict[str, float | int] = {"best_epoch": epoch}
+        self._run.summary["best_epoch"] = epoch
+        if score is not None:
+            payload["best_score"] = score
+            self._run.summary["best_score"] = score
+        self._run.log(payload, step=epoch)
+
+    def close(self) -> None:
+        self._run.finish()
             
 class CheckpointLogger:
     """Saves the best model's state dict to disk whenever a new best is found.

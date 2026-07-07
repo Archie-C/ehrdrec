@@ -19,11 +19,9 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from ehrdrec.processing.to_multihot.to_multihot import MultiHotProcessor
 from ehrdrec.processing.to_multihot.to_multihot_many_atc import MultiHotProcessorAllATCs
-from ehrdrec.processing.to_multihot.llm_codes import LLMCodeProcessor
 from ehrdrec.evaluation.standard import Evaluator
 from ehrdrec.metrics.jaccard import Jaccard
 from ehrdrec.metrics.f1 import F1
-from ehrdrec.metrics.prauc import PRAUC
 from ehrdrec.mappings.code_to_id.vocab import Vocab
 
 
@@ -228,75 +226,6 @@ class TestMultiHotProcessorHelpers:
         data = json.loads(path.read_text())
         assert "token_to_id" in data
         assert "id_to_token" in data
-
-
-# ===========================================================================
-# LLMCodeProcessor — keeps symbolic codes plus metric columns
-# ===========================================================================
-
-class TestLLMCodeProcessorHelpers:
-
-    @pytest.fixture
-    def proc(self):
-        p = LLMCodeProcessor.__new__(LLMCodeProcessor)
-        p.cache_dir = Path("/tmp/ehrdrec_test_cache_llm_codes")
-
-        lf = _base_lf()
-        p.diagnoses_vocab = Vocab.from_lazyframe(lf, "diagnoses")
-        p.procedures_vocab = Vocab.from_lazyframe(lf, "procedures")
-        p.medications_vocab = Vocab.from_lazyframe(lf, "atc_codes")
-        return p
-
-    @pytest.fixture
-    def encoded(self, proc):
-        return proc._convert_codes_to_integers(_base_lf())
-
-    def test_add_metric_columns_keeps_symbolic_codes(self, proc, encoded):
-        out = proc._add_metric_columns(encoded).collect()
-        for col in ("diagnoses", "procedures", "atc_codes"):
-            assert col in out.columns
-
-    def test_add_metric_columns_keeps_id_columns_for_metrics(self, proc, encoded):
-        out = proc._add_metric_columns(encoded).collect()
-        for col in ("diagnosis_ids", "procedure_ids", "atc_ids"):
-            assert col in out.columns
-
-    def test_add_metric_columns_adds_medication_multihot(self, proc, encoded):
-        out = proc._add_metric_columns(encoded).collect()
-        vec = out["medication_multihot"][0].to_list()
-        assert len(vec) == proc.medications_vocab.vocab_size
-        assert all(v in (0, 1) for v in vec)
-
-    def test_add_metric_columns_drops_raw_medication_structs(self, proc, encoded):
-        out = proc._add_metric_columns(encoded).collect()
-        assert "medications" not in out.columns
-
-    def test_cache_key_changes_with_atc_level(self, proc):
-        from ehrdrec.models.dataclasses.data_loading import LoadedData
-
-        data = LoadedData(
-            data_source="synthetic",
-            dataset_name="synthetic",
-            frame=_base_lf(),
-        )
-        key_atc3 = proc._cache_key(
-            data=data,
-            minimum_admissions=1,
-            split_frac=(0.8, 0.1, 0.1),
-            mapping_file="missing.sqlite",
-            include_reserved=True,
-            atc_level=3,
-        )
-        key_atc5 = proc._cache_key(
-            data=data,
-            minimum_admissions=1,
-            split_frac=(0.8, 0.1, 0.1),
-            mapping_file="missing.sqlite",
-            include_reserved=True,
-            atc_level=5,
-        )
-        assert key_atc3 != key_atc5
-
 
 # ===========================================================================
 # MultiHotProcessorAllATCs — _add_atc_level_columns

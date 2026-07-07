@@ -12,6 +12,8 @@ with suppress(ModuleNotFoundError):
     from .torch.micron import Micron
 with suppress(ModuleNotFoundError):
     from .torch.original.mr_dtr import MRDTR
+with suppress(ModuleNotFoundError):
+    from .torch.original.rpnet import RPNet
 
 from .dataclasses import (
     Medication,
@@ -43,6 +45,7 @@ __all__ = [
         "TrainingResults",
         "EvaluationResults",
         "MRDTR",
+        "RPNet",
     ]
     if name in globals()
 ]

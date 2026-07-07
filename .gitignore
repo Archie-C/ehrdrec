@@ -218,4 +218,4 @@ fastrx_checkpoints/
 foursdrug_checkpoints/
 checkpoints/
 
-.wandb/
+.wandb/*

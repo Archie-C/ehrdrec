@@ -24,7 +24,7 @@ from .datasets import (
 # Models
 from . import models as _models
 
-for _model_name in ("MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron"):
+for _model_name in ("MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron", "RPNet"):
     if hasattr(_models, _model_name):
         globals()[_model_name] = getattr(_models, _model_name)
 
@@ -133,6 +133,6 @@ __all__ = [
 
 __all__.extend(
     name
-    for name in ["MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron"]
+    for name in ["MLP", "GameNetFast", "FourSDrug", "FastRx", "Micron", "RPNet"]
     if name in globals()
 )

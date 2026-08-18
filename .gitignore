@@ -217,3 +217,5 @@ drug_jepa_checkpoints/
 fastrx_checkpoints/
 foursdrug_checkpoints/
 checkpoints/
+
+.wandb/*

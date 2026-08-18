@@ -13,11 +13,13 @@ requires-python = ">=3.12"
 # These are the libraries people get when they 'pip install' your package
 dependencies = [
     "einops>=0.8.2",
+    "info-nce-pytorch>=0.1.4",
     "optuna>=4.9.0",
     "platformdirs>=4.10.0",
     "polars>=1.41.2",
     "pydantic>=2.13.4",
     "torch~=2.11.0",
+    "torch-geometric>=2.8.0",
     "tqdm>=4.68.2",
 ]
 
@@ -33,6 +35,7 @@ classifiers = [
 [project.optional-dependencies]
 tensorboard = ["tensorboard>=2.18.0"]
 llm = ["transformers", "accelerate"]
+wandb = ["wandb>=0.17.0"]
 
 [dependency-groups]
 dev = [

@@ -1,50 +1,43 @@
-from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any
 
+import torch
 from torch import nn
 
-class EHRDrecModel(ABC):
-    
-    @classmethod
-    @abstractmethod
-    def requirements(cls):
-        """
-        Declare the data and side information required by the model.
-        """
-        ...
-    
-    @abstractmethod
-    def fit(
-        self,
-        train_data: Any,
-        validation_data: Any,
-        resources: dict[str, Any] | None = None,
-    ) -> None:
-        ...
-    
-    @abstractmethod
-    def predict(
-        self,
-        data: Any,
-        resources: dict[str, Any] | None = None,
-    ) -> Any:
-        ...
-    
-    @abstractmethod
-    def save(self, path: Path) -> None:
-        """
-        Save the model to the specified path.
-        """
-        ...
-    
-    @abstractmethod
-    def load(self, path: Path) -> None:
-        """
-        Load the model from the specified path.
-        """
-        ...
+from ehrdrec.contracts.models import LossOutput, ModelContext, ModelOutput
+from ehrdrec.requirements.model import InputRequirement, ModelRequirement
 
-class TorchEHRDrecModel(EHRDrecModel, nn.Module):
-    def __init__(self):
-        nn.Module.__init__(self)
+class TorchEHRDrecModel(nn.Module):
+    _inputs: set[InputRequirement] = set()
+    _requirements: set[ModelRequirement] = set()
+
+    def __init__(self, context: ModelContext):
+        super().__init__()
+        self.context = context
+
+    def forward(self, batch: Any) -> ModelOutput:
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    def loss(
+        self,
+        outputs: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> LossOutput:
+        prediction_loss = self.context.task_loss(
+            outputs=outputs,
+            targets=targets,
+        )
+
+        return LossOutput(
+            total=prediction_loss,
+            components={
+                "prediction": prediction_loss,
+            },
+        )
+
+    @classmethod
+    def get_inputs(cls) -> set[InputRequirement]:
+        return cls._inputs
+
+    @classmethod
+    def get_requirements(cls) -> set[ModelRequirement]:
+        return cls._requirements

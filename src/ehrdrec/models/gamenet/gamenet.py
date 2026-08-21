@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
+from ehrdrec.data.requirements import ModelRequirement
 from ehrdrec.models.base import TorchEHRDrecModel
 from .layers import GCN
 
@@ -28,6 +29,14 @@ class GAMENet(TorchEHRDrecModel):
     close to the original GAMENet implementation while exposing training and
     prediction through the EHRDRec model interface.
     """
+
+    requirements = {
+        ModelRequirement.DIAGNOSES,
+        ModelRequirement.PROCEDURES,
+        ModelRequirement.MEDICATION_HISTORY,
+        ModelRequirement.EHR_MEDICATION_GRAPH,
+        ModelRequirement.DDI_GRAPH,
+    }
     
     def __init__(
         self,

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from ehrdrec.data.requirements import ModelRequirement
 from ehrdrec.models.base import TorchEHRDrecModel
 from .layers import GCN, MedTransformerDecoder, SelfAttend, Beam
 
@@ -79,6 +80,15 @@ class COGNet(TorchEHRDrecModel):
     evaluator, while the actual generated medication sets are available
     from ``generate``.
     """
+
+    requirements = {
+        ModelRequirement.DIAGNOSES,
+        ModelRequirement.PROCEDURES,
+        ModelRequirement.MEDICATION_HISTORY,
+        ModelRequirement.EHR_MEDICATION_GRAPH,
+        ModelRequirement.DDI_GRAPH,
+        ModelRequirement.SEQUENTIAL_TARGET,
+    }
 
     def __init__(
         self,

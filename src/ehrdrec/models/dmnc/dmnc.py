@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from ehrdrec.data.requirements import ModelRequirement
 from ehrdrec.models.base import TorchEHRDrecModel
 
 
@@ -1009,6 +1010,12 @@ class DMNC(TorchEHRDrecModel):
     This implementation corresponds to the late-fusion DMNC configuration
     (separate DNC memories).
     """
+
+    requirements = {
+        ModelRequirement.DIAGNOSES,
+        ModelRequirement.PROCEDURES,
+        ModelRequirement.DETERMINISTIC_ORDERING,
+    }
 
     def __init__(
         self,

@@ -1,199 +1,190 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
 
+from ehrdrec.contracts.models import LossOutput, ModelOutput
+from ehrdrec.requirements.model import (
+    Feature,
+    InputRequirement,
+    InputStructure,
+    Representation,
+)
 from ehrdrec.models.base import TorchEHRDrecModel
 from .layers import RETAINGRU
-
 
 
 class RETAIN(TorchEHRDrecModel):
     """
     EHRDRec implementation of RETAIN.
 
-    Ported from the original Theano implementation by Edward Choi et al.
+    Based on:
+        Choi et al. (2016)
+        "RETAIN: An Interpretable Predictive Model for Healthcare
+        using Reverse Time Attention Mechanism"
 
-    The model represents every visit as the sum of the embeddings of the
-    medical codes present in that visit. Two reverse-time GRUs generate:
+    EHRDRec supplies diagnosis and procedure information as sequences
+    of per-visit multi-hot vectors.
 
-        - alpha: scalar visit-level attention weights
-        - beta: vector-valued feature-level attention weights
+    For a patient with T visits:
 
-    These are combined with the visit embeddings to form the patient
-    context used for prediction.
+        diagnoses:
+            Tensor[T, diagnoses_vocab_size]
 
-    Expected EHRDRec input
-    ----------------------
-    A patient history is a list of visit dictionaries of the form:
+        procedures:
+            Tensor[T, procedures_vocab_size]
 
-        {
-            "codes": list[int],
-            "time": float,       # required only when use_time=True
-        }
+    RETAIN concatenates the two feature spaces to construct the visit
+    vector x_i described in the original paper:
 
-    For the original binary RETAIN setting, output_dim should be 1.
-    For a multi-label task such as medication recommendation, output_dim
-    may instead be the medication vocabulary size; that is an adaptation
-    of the original classifier head rather than a property of the source
-    implementation itself.
+        x_i = [diagnoses_i, procedures_i]
+
+    The visit representation is then:
+
+        v_i = W_emb x_i
+
+    Training, batching, device placement, optimization, prediction,
+    evaluation, and checkpointing are handled by EHRDRec.
     """
+
+    _inputs = {
+        InputRequirement(
+            Feature.DIAGNOSES,
+            Representation.MULTI_HOT,
+            InputStructure.VISIT_SEQUENCE,
+        ),
+        InputRequirement(
+            Feature.PROCEDURES,
+            Representation.MULTI_HOT,
+            InputStructure.VISIT_SEQUENCE,
+        ),
+    }
+
+    _requirements = set()
 
     def __init__(
         self,
-        input_vocab_size: int,
-        output_dim: int = 1,
+        context,
         embedding_dim: int = 128,
         alpha_hidden_dim: int = 128,
         beta_hidden_dim: int = 128,
-        embedding_weights: torch.Tensor | None = None,
-        embedding_finetune: bool = True,
-        use_time: bool = False,
-        use_log_time: bool = True,
         keep_prob_embedding: float = 0.5,
         keep_prob_context: float = 0.5,
         l2_output: float = 0.001,
         l2_embedding: float = 0.001,
         l2_alpha: float = 0.001,
         l2_beta: float = 0.001,
-        epochs: int = 10,
-        solver: str = "adadelta",
-        learning_rate: float | None = None,
-        log_eps: float = 1e-8,
-        device: torch.device | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(context)
 
-        # ============================================================
-        # Runtime
-        # ============================================================
-
-        self.device = (
-            device
-            if device is not None
-            else torch.device(
-                "cuda" if torch.cuda.is_available() else "cpu"
+        if not 0.0 < keep_prob_embedding <= 1.0:
+            raise ValueError(
+                "keep_prob_embedding must be in (0, 1]."
             )
+
+        if not 0.0 < keep_prob_context <= 1.0:
+            raise ValueError(
+                "keep_prob_context must be in (0, 1]."
+            )
+
+        # ============================================================
+        # Vocabulary dimensions
+        # ============================================================
+        if context.vocab.diagnoses is None:
+            raise ValueError(
+                "RETAIN requires a diagnoses vocabulary."
+            )
+
+        if context.vocab.procedures is None:
+            raise ValueError(
+                "RETAIN requires a procedures vocabulary."
+            )
+
+        if context.vocab.medications is None:
+            raise ValueError(
+                "RETAIN requires a medications vocabulary."
+            )
+
+        diagnoses_vocab_size = context.vocab.diagnoses
+        procedures_vocab_size = context.vocab.procedures
+        medications_vocab_size = context.vocab.medications
+
+        self.input_vocab_size = (
+            diagnoses_vocab_size
+            + procedures_vocab_size
         )
 
+        self.output_dim = medications_vocab_size
+        self.embedding_dim = embedding_dim
+
         # ============================================================
-        # Model configuration
+        # Regularisation configuration
         # ============================================================
-
-        self.input_vocab_size = input_vocab_size
-        self.output_dim = output_dim
-        self.alpha_hidden_dim = alpha_hidden_dim
-        self.beta_hidden_dim = beta_hidden_dim
-
-        self.embedding_finetune = embedding_finetune
-        self.use_time = use_time
-        self.use_log_time = use_log_time
-
-        self.keep_prob_embedding = keep_prob_embedding
-        self.keep_prob_context = keep_prob_context
 
         self.l2_output = l2_output
         self.l2_embedding = l2_embedding
         self.l2_alpha = l2_alpha
         self.l2_beta = l2_beta
 
-        self.epochs = epochs
-        self.solver = solver.lower()
-
-        # Retained for configuration/provenance compatibility with the
-        # original implementation. BCE-with-logits is numerically stable
-        # and therefore does not require an explicit epsilon.
-        self.log_eps = log_eps
-
-        if not 0.0 < keep_prob_embedding <= 1.0:
-            raise ValueError("keep_prob_embedding must be in (0, 1].")
-
-        if not 0.0 < keep_prob_context <= 1.0:
-            raise ValueError("keep_prob_context must be in (0, 1].")
-
         # ============================================================
         # Visit embedding
+        #
+        # Original RETAIN:
+        #
+        #     v_i = W_emb x_i
+        #
+        # nn.Linear(..., bias=False) directly implements this.
         # ============================================================
 
-        if embedding_weights is not None:
-            embedding_weights = torch.as_tensor(
-                embedding_weights,
-                dtype=torch.float32,
-            )
-
-            if embedding_weights.ndim != 2:
-                raise ValueError(
-                    "embedding_weights must have shape "
-                    "(input_vocab_size, embedding_dim)."
-                )
-
-            if embedding_weights.shape[0] != input_vocab_size:
-                raise ValueError(
-                    "embedding_weights first dimension must equal "
-                    "input_vocab_size."
-                )
-
-            embedding_dim = int(embedding_weights.shape[1])
-
-            self.embedding = nn.Embedding.from_pretrained(
-                embedding_weights,
-                freeze=not embedding_finetune,
-            )
-        else:
-            self.embedding = nn.Embedding(
-                input_vocab_size,
-                embedding_dim,
-            )
-            nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
-            self.embedding.weight.requires_grad_(embedding_finetune)
-
-        self.embedding_dim = embedding_dim
+        self.embedding = nn.Linear(
+            self.input_vocab_size,
+            embedding_dim,
+            bias=False,
+        )
 
         self.embedding_dropout = nn.Dropout(
-            p=1.0 - keep_prob_embedding
+            p=1.0 - keep_prob_embedding,
         )
+
         self.context_dropout = nn.Dropout(
-            p=1.0 - keep_prob_context
+            p=1.0 - keep_prob_context,
         )
 
         # ============================================================
         # Reverse-time attention networks
         # ============================================================
 
-        gru_input_dim = embedding_dim + (1 if use_time else 0)
-
         self.alpha_gru = RETAINGRU(
-            input_dim=gru_input_dim,
+            input_dim=embedding_dim,
             hidden_dim=alpha_hidden_dim,
         )
 
         self.beta_gru = RETAINGRU(
-            input_dim=gru_input_dim,
+            input_dim=embedding_dim,
             hidden_dim=beta_hidden_dim,
         )
 
+        # Visit-level scalar attention.
         self.alpha = nn.Linear(
             alpha_hidden_dim,
             1,
         )
 
+        # Feature-level vector attention.
         self.beta = nn.Linear(
             beta_hidden_dim,
             embedding_dim,
         )
 
         # ============================================================
-        # Output layer
+        # Medication prediction
         # ============================================================
 
         self.output = nn.Linear(
             embedding_dim,
-            output_dim,
+            medications_vocab_size,
         )
 
         # ============================================================
@@ -201,44 +192,6 @@ class RETAIN(TorchEHRDrecModel):
         # ============================================================
 
         self._init_weights()
-        self.to(self.device)
-
-        # ============================================================
-        # Optimizer
-        # ============================================================
-
-        trainable_parameters = [
-            parameter
-            for parameter in self.parameters()
-            if parameter.requires_grad
-        ]
-
-        if self.solver == "adadelta":
-            # Matches the original Adadelta update:
-            # rho = 0.95, eps = 1e-6, no additional learning-rate scale.
-            lr = 1.0 if learning_rate is None else learning_rate
-            self.optimizer = torch.optim.Adadelta(
-                trainable_parameters,
-                lr=lr,
-                rho=0.95,
-                eps=1e-6,
-            )
-
-        elif self.solver == "adam":
-            # The original custom Adam implementation corresponds to
-            # standard Adam with betas=(0.9, 0.999), eps=1e-8.
-            lr = 2e-4 if learning_rate is None else learning_rate
-            self.optimizer = torch.optim.Adam(
-                trainable_parameters,
-                lr=lr,
-                betas=(0.9, 0.999),
-                eps=1e-8,
-            )
-
-        else:
-            raise ValueError(
-                "solver must be either 'adadelta' or 'adam'."
-            )
 
     # ================================================================
     # Initialisation
@@ -246,177 +199,158 @@ class RETAIN(TorchEHRDrecModel):
 
     def _init_weights(self) -> None:
         """
-        Match the original RETAIN parameter initialisation.
+        Initialise RETAIN parameters following the original implementation.
         """
 
-        nn.init.uniform_(self.alpha.weight, -0.1, 0.1)
-        nn.init.zeros_(self.alpha.bias)
-
-        nn.init.uniform_(self.beta.weight, -0.1, 0.1)
-        nn.init.zeros_(self.beta.bias)
-
-        nn.init.uniform_(self.output.weight, -0.1, 0.1)
-        nn.init.zeros_(self.output.bias)
-
-    # ================================================================
-    # Input representation
-    # ================================================================
-
-    def _visit_embeddings(
-        self,
-        patient_history: list[dict[str, Any]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Construct visit embeddings and optional time values.
-
-        Returns
-        -------
-        visit_embeddings:
-            Tensor of shape (sequence_length, embedding_dim).
-
-        gru_inputs:
-            Tensor of shape
-            (sequence_length, embedding_dim [+ 1 if time is used]).
-        """
-
-        if len(patient_history) == 0:
-            raise ValueError("patient_history cannot be empty.")
-
-        visit_embeddings = []
-        time_values = []
-
-        for visit in patient_history:
-            if "codes" not in visit:
-                raise KeyError(
-                    "Each RETAIN visit must contain a 'codes' field."
-                )
-
-            codes = torch.as_tensor(
-                visit["codes"],
-                dtype=torch.long,
-                device=self.device,
-            )
-
-            if codes.numel() == 0:
-                visit_embedding = torch.zeros(
-                    self.embedding_dim,
-                    dtype=self.embedding.weight.dtype,
-                    device=self.device,
-                )
-            else:
-                # Equivalent to multiplying the original multi-hot visit
-                # vector by W_emb: code embeddings are summed, not averaged.
-                visit_embedding = self.embedding(codes).sum(dim=0)
-
-            visit_embeddings.append(visit_embedding)
-
-            if self.use_time:
-                if "time" not in visit:
-                    raise KeyError(
-                        "RETAIN was configured with use_time=True, but a "
-                        "visit does not contain a 'time' value."
-                    )
-                time_values.append(float(visit["time"]))
-
-        visit_embeddings_tensor = torch.stack(
-            visit_embeddings,
-            dim=0,
+        nn.init.uniform_(
+            self.embedding.weight,
+            -0.1,
+            0.1,
         )
 
-        # The source implementation applies embedding dropout before both
-        # the GRUs and the final alpha * beta * embedding aggregation.
-        visit_embeddings_tensor = self.embedding_dropout(
-            visit_embeddings_tensor
+        nn.init.uniform_(
+            self.alpha.weight,
+            -0.1,
+            0.1,
+        )
+        nn.init.zeros_(
+            self.alpha.bias,
         )
 
-        gru_inputs = visit_embeddings_tensor
+        nn.init.uniform_(
+            self.beta.weight,
+            -0.1,
+            0.1,
+        )
+        nn.init.zeros_(
+            self.beta.bias,
+        )
 
-        if self.use_time:
-            times = torch.as_tensor(
-                time_values,
-                dtype=visit_embeddings_tensor.dtype,
-                device=self.device,
-            )
-
-            if self.use_log_time:
-                times = torch.log1p(times)
-
-            gru_inputs = torch.cat(
-                [
-                    visit_embeddings_tensor,
-                    times.unsqueeze(-1),
-                ],
-                dim=-1,
-            )
-
-        return visit_embeddings_tensor, gru_inputs
+        nn.init.uniform_(
+            self.output.weight,
+            -0.1,
+            0.1,
+        )
+        nn.init.zeros_(
+            self.output.bias,
+        )
 
     # ================================================================
-    # Forward
+    # Patient forward
     # ================================================================
 
-    def forward(
+    def _forward_patient(
         self,
-        patient_history: list[dict[str, Any]],
+        diagnoses: torch.Tensor,
+        procedures: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Perform a RETAIN forward pass for one patient history.
+        Perform RETAIN for one patient.
 
         Parameters
         ----------
-        patient_history:
-            Ordered visit history. Each visit must contain ``codes`` and,
-            when ``use_time=True``, ``time``.
+        diagnoses:
+            Multi-hot diagnosis vectors with shape:
+
+                (num_visits, diagnoses_vocab_size)
+
+        procedures:
+            Multi-hot procedure vectors with shape:
+
+                (num_visits, procedures_vocab_size)
 
         Returns
         -------
         torch.Tensor
-            Raw logits with shape (1, output_dim).
+            Raw medication logits with shape:
 
-        Notes
-        -----
-        The original Theano code computes a context vector for every prefix
-        of a padded sequence and then selects the final valid timestep for
-        each patient. EHRDRec supplies one complete task example at a time,
-        so computing the context for the complete history is equivalent to
-        the final-prefix prediction used by the original implementation.
+                (1, medications_vocab_size)
         """
 
-        embeddings, gru_inputs = self._visit_embeddings(
-            patient_history
+        if diagnoses.ndim != 2:
+            raise ValueError(
+                "RETAIN diagnoses input must have shape "
+                "(num_visits, diagnoses_vocab_size)."
+            )
+
+        if procedures.ndim != 2:
+            raise ValueError(
+                "RETAIN procedures input must have shape "
+                "(num_visits, procedures_vocab_size)."
+            )
+
+        if diagnoses.shape[0] != procedures.shape[0]:
+            raise ValueError(
+                "Diagnosis and procedure sequences must contain "
+                "the same number of visits."
+            )
+
+        if diagnoses.shape[0] == 0:
+            raise ValueError(
+                "RETAIN requires at least one visit."
+            )
+
+        # ------------------------------------------------------------
+        # Construct original RETAIN visit vector x_i
+        # ------------------------------------------------------------
+
+        visits = torch.cat(
+            [
+                diagnoses.float(),
+                procedures.float(),
+            ],
+            dim=-1,
         )
 
-        # The original implementation runs both GRUs in reverse temporal
-        # order and then reverses their hidden-state sequences back to the
-        # original visit order.
-        reverse_inputs = torch.flip(
-            gru_inputs,
+        # ------------------------------------------------------------
+        # Step 1: visit embeddings
+        #
+        #     v_i = W_emb x_i
+        # ------------------------------------------------------------
+
+        embeddings = self.embedding(
+            visits,
+        )
+
+        embeddings = self.embedding_dropout(
+            embeddings,
+        )
+
+        # ------------------------------------------------------------
+        # Steps 2 and 3:
+        # Reverse-time RNNs generating alpha and beta
+        # ------------------------------------------------------------
+
+        reverse_embeddings = torch.flip(
+            embeddings,
             dims=[0],
         ).unsqueeze(1)
 
         reverse_alpha_hidden = self.alpha_gru(
-            reverse_inputs
-        )
-        reverse_beta_hidden = self.beta_gru(
-            reverse_inputs
+            reverse_embeddings,
         )
 
+        reverse_beta_hidden = self.beta_gru(
+            reverse_embeddings,
+        )
+
+        # Restore chronological visit order.
         alpha_hidden = torch.flip(
             reverse_alpha_hidden,
             dims=[0],
-        ).squeeze(1) * 0.5
+        ).squeeze(1)
 
         beta_hidden = torch.flip(
             reverse_beta_hidden,
             dims=[0],
-        ).squeeze(1) * 0.5
+        ).squeeze(1)
 
         # ------------------------------------------------------------
-        # Alpha: visit-level scalar attention
+        # Alpha: visit-level attention
         # ------------------------------------------------------------
 
         alpha_logits = self.alpha(
-            alpha_hidden
+            alpha_hidden,
         ).squeeze(-1)
 
         alpha = torch.softmax(
@@ -425,170 +359,103 @@ class RETAIN(TorchEHRDrecModel):
         )
 
         # ------------------------------------------------------------
-        # Beta: visit-level feature attention
+        # Beta: feature-level attention
         # ------------------------------------------------------------
 
         beta = torch.tanh(
-            self.beta(beta_hidden)
+            self.beta(
+                beta_hidden,
+            )
         )
 
         # ------------------------------------------------------------
-        # Patient context
+        # Step 4: patient context
+        #
+        # c = Σ alpha_i * beta_i ⊙ v_i
         # ------------------------------------------------------------
 
-        context = (
+        patient_context = (
             alpha.unsqueeze(-1)
             * beta
             * embeddings
         ).sum(dim=0)
 
-        context = self.context_dropout(
-            context
+        patient_context = self.context_dropout(
+            patient_context,
         )
 
+        # ------------------------------------------------------------
+        # Step 5: medication prediction
+        # ------------------------------------------------------------
+
         logits = self.output(
-            context
+            patient_context,
         )
 
         return logits.unsqueeze(0)
 
     # ================================================================
-    # Batch helper
+    # Forward
     # ================================================================
 
-    def _forward_batch(
+    def forward(
         self,
-        patient_histories: list[list[dict[str, Any]]],
-    ) -> torch.Tensor:
+        batch: Any,
+    ) -> ModelOutput:
         """
-        Evaluate a batch of variable-length patient histories.
+        Perform a RETAIN forward pass.
 
-        The original model pads sequences and evaluates them together.
-        EHRDRec can preserve the same model semantics more simply by
-        evaluating each variable-length history independently and stacking
-        the resulting logits.
+        Expected batch inputs
+        ---------------------
+        batch.diagnoses:
+            List of tensors, one per patient:
+
+                [
+                    Tensor[T_1, diagnoses_vocab_size],
+                    Tensor[T_2, diagnoses_vocab_size],
+                    ...
+                ]
+
+        batch.procedures:
+            List of tensors, one per patient:
+
+                [
+                    Tensor[T_1, procedures_vocab_size],
+                    Tensor[T_2, procedures_vocab_size],
+                    ...
+                ]
+
+        Returns
+        -------
+        torch.Tensor
+            Raw medication logits with shape:
+
+                (batch_size, medications_vocab_size)
         """
 
-        return torch.cat(
-            [self.forward(history) for history in patient_histories],
-            dim=0,
+        if len(batch.diagnoses) != len(batch.procedures):
+            raise ValueError(
+                "Diagnosis and procedure batches must contain "
+                "the same number of patients."
+            )
+
+        patient_logits = [
+            self._forward_patient(
+                diagnoses,
+                procedures,
+            )
+            for diagnoses, procedures in zip(
+                batch.diagnoses,
+                batch.procedures,
+            )
+        ]
+
+        return ModelOutput(
+            scores=torch.cat(
+                patient_logits,
+                dim=0,
+            )
         )
-
-    # ================================================================
-    # Training
-    # ================================================================
-
-    def fit(
-        self,
-        train_data: DataLoader,
-        validation_data: DataLoader,
-        resources: dict[str, Any] | None = None,
-    ) -> None:
-        """
-        Train RETAIN using EHRDRec-provided data.
-
-        Expected batches contain:
-
-            batch["x"] -> list of patient histories
-            batch["Y"] -> target tensor
-
-        ``resources`` is currently unused because RETAIN does not require
-        additional graph or ontology resources.
-        """
-
-        for _epoch in range(self.epochs):
-            # --------------------------------------------------------
-            # Training
-            # --------------------------------------------------------
-
-            self.train()
-
-            for batch in train_data:
-                patient_histories = batch["x"]
-                target = torch.as_tensor(
-                    batch["Y"],
-                    dtype=torch.float32,
-                    device=self.device,
-                )
-
-                logits = self._forward_batch(
-                    patient_histories
-                )
-
-                target = self._normalise_target_shape(
-                    target,
-                    logits,
-                )
-
-                loss = self.loss(
-                    logits,
-                    target,
-                )
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-
-            # --------------------------------------------------------
-            # Validation
-            # --------------------------------------------------------
-
-            self.eval()
-
-            validation_predictions = []
-            validation_targets = []
-
-            with torch.no_grad():
-                for batch in validation_data:
-                    patient_histories = batch["x"]
-                    target = torch.as_tensor(
-                        batch["Y"],
-                        dtype=torch.float32,
-                        device=self.device,
-                    )
-
-                    logits = self._forward_batch(
-                        patient_histories
-                    )
-
-                    target = self._normalise_target_shape(
-                        target,
-                        logits,
-                    )
-
-                    validation_predictions.append(
-                        logits.detach().cpu()
-                    )
-                    validation_targets.append(
-                        target.detach().cpu()
-                    )
-
-            # TODO:
-            # The original implementation selects the best epoch using
-            # validation ROC-AUC. EHRDRec's standard validation/early-
-            # stopping interface should own that policy once it is defined.
-
-    # ================================================================
-    # Prediction
-    # ================================================================
-
-    def predict(
-        self,
-        x: list[dict[str, Any]],
-    ) -> torch.Tensor:
-        """
-        Generate raw prediction logits for one patient history.
-
-        Sigmoid conversion, thresholding, and final metric computation are
-        intentionally left to EHRDRec.
-        """
-
-        self.eval()
-
-        with torch.no_grad():
-            logits = self.forward(x)
-
-        return logits
 
     # ================================================================
     # Loss
@@ -596,89 +463,25 @@ class RETAIN(TorchEHRDrecModel):
 
     def loss(
         self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        **kwargs: Any,
-    ) -> torch.Tensor:
-        """
-        Compute the RETAIN objective.
-
-        This matches the source objective:
-
-            binary cross-entropy
-            + L2(output weights)
-            + L2(alpha weights)
-            + L2(beta weights)
-            + optional L2(embedding weights)
-        """
-
-        prediction_loss = F.binary_cross_entropy_with_logits(
-            pred,
-            target.float(),
-            reduction="mean",
+        outputs: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> LossOutput:
+        base_loss = super().loss(
+            outputs=outputs,
+            targets=targets,
         )
 
-        regularisation = (
-            self.l2_output * self.output.weight.pow(2).sum()
-            + self.l2_alpha * self.alpha.weight.pow(2).sum()
-            + self.l2_beta * self.beta.weight.pow(2).sum()
+        regularisation_loss = (
+            self.l2_output * self.output.weight.square().sum()
+            + self.l2_embedding * self.embedding.weight.square().sum()
+            + self.l2_alpha * self.alpha.weight.square().sum()
+            + self.l2_beta * self.beta.weight.square().sum()
         )
 
-        if self.embedding_finetune:
-            regularisation = (
-                regularisation
-                + self.l2_embedding
-                * self.embedding.weight.pow(2).sum()
-            )
-
-        return prediction_loss + regularisation
-
-    @staticmethod
-    def _normalise_target_shape(
-        target: torch.Tensor,
-        logits: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Normalise common target layouts to match the logits.
-        """
-
-        if target.ndim == 0:
-            target = target.reshape(1, 1)
-
-        elif target.ndim == 1 and logits.ndim == 2:
-            if logits.shape[1] == 1:
-                target = target.unsqueeze(-1)
-            elif logits.shape[0] == 1:
-                target = target.unsqueeze(0)
-
-        if target.shape != logits.shape:
-            raise ValueError(
-                "Target shape does not match RETAIN output shape: "
-                f"target={tuple(target.shape)}, "
-                f"logits={tuple(logits.shape)}."
-            )
-
-        return target
-
-    # ================================================================
-    # Saving
-    # ================================================================
-
-    def save(
-        self,
-        path: str | Path,
-    ) -> None:
-        """
-        Save the trained RETAIN model state.
-        """
-
-        path = Path(path)
-        path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        torch.save(
-            self.state_dict(),
-            path,
+        return LossOutput(
+            total=base_loss.total + regularisation_loss,
+            components={
+                **base_loss.components,
+                "regularisation": regularisation_loss,
+            },
         )

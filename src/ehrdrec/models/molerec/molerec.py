@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from ehrdrec.data.requirements import ModelRequirement
 from ehrdrec.models.base import TorchEHRDrecModel
 
 from .layers import AdjAttenAgger, GNNGraph, SAB
@@ -51,7 +52,7 @@ class MoleRec(TorchEHRDrecModel):
 
         - molecular graph data for the medication molecules
         - medication-to-molecule average projection matrix
-        - medication-to-substructure incidence matrix (ddi_mask_H)
+        - medication-to-substructure incidence matrix (drug_fragment_mask)
         - DDI adjacency matrix
         - optionally substructure graph data
 
@@ -68,13 +69,23 @@ class MoleRec(TorchEHRDrecModel):
     left to the common EHRDRec evaluation layer.
     """
 
+    requirements = {
+        ModelRequirement.DIAGNOSES,
+        ModelRequirement.PROCEDURES,
+        ModelRequirement.MOLECULAR_GRAPHS,
+        ModelRequirement.MEDICATION_MOLECULE_PROJECTION,
+        ModelRequirement.MEDICATION_SUBSTRUCTURE_MATRIX,
+        ModelRequirement.SUBSTRUCTURE_GRAPHS,
+        ModelRequirement.DDI_GRAPH,
+    }
+
     def __init__(
         self,
         diagnoses_vocab_size: int,
         procedures_vocab_size: int,
         medications_vocab_size: int,
         molecule_data: dict[str, Any],
-        ddi_mask_H: torch.Tensor,
+        drug_fragment_mask: torch.Tensor,
         ddi_adj: torch.Tensor,
         average_projection: torch.Tensor,
         global_para: dict[str, Any],
@@ -140,8 +151,8 @@ class MoleRec(TorchEHRDrecModel):
         # Fixed molecular / DDI resources
         # ============================================================
 
-        ddi_mask_H = torch.as_tensor(
-            ddi_mask_H,
+        drug_fragment_mask = torch.as_tensor(
+            drug_fragment_mask,
             dtype=torch.float32,
         )
 
@@ -155,15 +166,15 @@ class MoleRec(TorchEHRDrecModel):
             dtype=torch.float32,
         )
 
-        if ddi_mask_H.ndim != 2:
+        if drug_fragment_mask.ndim != 2:
             raise ValueError(
-                "ddi_mask_H must have shape "
+                "drug_fragment_mask must have shape "
                 "(medications, substructures)."
             )
 
-        if ddi_mask_H.shape[0] != medications_vocab_size:
+        if drug_fragment_mask.shape[0] != medications_vocab_size:
             raise ValueError(
-                "ddi_mask_H first dimension must equal "
+                "drug_fragment_mask first dimension must equal "
                 "medications_vocab_size."
             )
 
@@ -183,12 +194,12 @@ class MoleRec(TorchEHRDrecModel):
             )
 
         self.substructure_count = int(
-            ddi_mask_H.shape[1]
+            drug_fragment_mask.shape[1]
         )
 
         self.register_buffer(
-            "ddi_mask_H",
-            ddi_mask_H,
+            "drug_fragment_mask",
+            drug_fragment_mask,
         )
 
         self.register_buffer(
@@ -610,7 +621,7 @@ class MoleRec(TorchEHRDrecModel):
             substructure_embeddings,
             substructure_weights,
             mask=torch.logical_not(
-                self.ddi_mask_H > 0
+                self.drug_fragment_mask > 0
             ),
         )
 

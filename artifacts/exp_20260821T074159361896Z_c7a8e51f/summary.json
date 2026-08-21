@@ -1,0 +1,25 @@
+{
+  "experiment_id": "exp_20260821T074159361896Z_c7a8e51f",
+  "model_name": "RETAIN",
+  "num_runs": 3,
+  "task": "MedicationSetRecommendationTask",
+  "test_metrics": {
+    "f1": {
+      "mean": 0.4298810462156932,
+      "std": 0.0029650720294664224
+    },
+    "jaccard": {
+      "mean": 0.28473907709121704,
+      "std": 0.0023938890770618393
+    },
+    "lrap": {
+      "mean": 0.7347913185755411,
+      "std": 0.0007767089707450458
+    },
+    "prauc_samples": {
+      "mean": 0.7347912364147103,
+      "std": 0.000776573856761438
+    }
+  },
+  "total_run_time": 878.4495694227517
+}

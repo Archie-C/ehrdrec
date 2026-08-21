@@ -1,0 +1,557 @@
+{
+  "command": "examples/testing.py",
+  "dataset": {
+    "fingerprint": "d27da8dc65bad4b756fc23fc1e391df65321d13c0df90c69dc80255d235a7950",
+    "name": "MIMIC-III",
+    "num_examples": 8540,
+    "num_patients": 2101,
+    "num_visits": 8540,
+    "sources": [
+      "ADMISSIONS",
+      "DIAGNOSES_ICD",
+      "PRESCRIPTIONS",
+      "PROCEDURES_ICD"
+    ],
+    "splits": [
+      {
+        "fingerprint": "a7d0c32140655d447a972141e11b8d5640458fd41e7d3df9e11ab4174077afcf",
+        "name": "train",
+        "num_examples": 4338,
+        "num_patients": 2101,
+        "num_visits": 4338
+      },
+      {
+        "fingerprint": "011df6fe4cebbe2db9081c184de1577e4c642f5a1a1e87c71c66711905b04a64",
+        "name": "validation",
+        "num_examples": 2101,
+        "num_patients": 2101,
+        "num_visits": 2101
+      },
+      {
+        "fingerprint": "2af6a70ae34262d6a015f5496523c9b00c4eb2aadfb7df25ffa91cdc833b4b44",
+        "name": "test",
+        "num_examples": 2101,
+        "num_patients": 2101,
+        "num_visits": 2101
+      }
+    ],
+    "version": "1.4"
+  },
+  "experiment_id": "exp_20260821T074159361896Z_c7a8e51f",
+  "finished_at": "2026-08-21T08:01:28.855321+00:00",
+  "hardware": {
+    "cpu": "Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz",
+    "cpu_count": 16,
+    "cuda_version": "13.0",
+    "cudnn_version": "91900",
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_count": 1,
+    "ram_gb": 64.022
+  },
+  "model": {
+    "config_source": null,
+    "name": "RETAIN",
+    "resolved_config": {
+      "alpha_hidden_dim": 128,
+      "beta_hidden_dim": 128,
+      "embedding_dim": 128,
+      "keep_prob_context": 0.5,
+      "keep_prob_embedding": 0.5,
+      "l2_alpha": 0.001,
+      "l2_beta": 0.001,
+      "l2_embedding": 0.001,
+      "l2_output": 0.001
+    },
+    "source": {
+      "content": "from __future__ import annotations\n\nfrom typing import Any\n\nimport torch\nimport torch.nn as nn\n\nfrom ehrdrec.contracts.models import LossOutput, ModelOutput\nfrom ehrdrec.requirements.model import (\n    Feature,\n    InputRequirement,\n    InputStructure,\n    Representation,\n)\nfrom ehrdrec.models.base import TorchEHRDrecModel\nfrom .layers import RETAINGRU\n\n\nclass RETAIN(TorchEHRDrecModel):\n    \"\"\"\n    EHRDRec implementation of RETAIN.\n\n    Based on:\n        Choi et al. (2016)\n        \"RETAIN: An Interpretable Predictive Model for Healthcare\n        using Reverse Time Attention Mechanism\"\n\n    EHRDRec supplies diagnosis and procedure information as sequences\n    of per-visit multi-hot vectors.\n\n    For a patient with T visits:\n\n        diagnoses:\n            Tensor[T, diagnoses_vocab_size]\n\n        procedures:\n            Tensor[T, procedures_vocab_size]\n\n    RETAIN concatenates the two feature spaces to construct the visit\n    vector x_i described in the original paper:\n\n        x_i = [diagnoses_i, procedures_i]\n\n    The visit representation is then:\n\n        v_i = W_emb x_i\n\n    Training, batching, device placement, optimization, prediction,\n    evaluation, and checkpointing are handled by EHRDRec.\n    \"\"\"\n\n    _inputs = {\n        InputRequirement(\n            Feature.DIAGNOSES,\n            Representation.MULTI_HOT,\n            InputStructure.VISIT_SEQUENCE,\n        ),\n        InputRequirement(\n            Feature.PROCEDURES,\n            Representation.MULTI_HOT,\n            InputStructure.VISIT_SEQUENCE,\n        ),\n    }\n\n    _requirements = set()\n\n    def __init__(\n        self,\n        context,\n        embedding_dim: int = 128,\n        alpha_hidden_dim: int = 128,\n        beta_hidden_dim: int = 128,\n        keep_prob_embedding: float = 0.5,\n        keep_prob_context: float = 0.5,\n        l2_output: float = 0.001,\n        l2_embedding: float = 0.001,\n        l2_alpha: float = 0.001,\n        l2_beta: float = 0.001,\n    ) -> None:\n        super().__init__(context)\n\n        if not 0.0 < keep_prob_embedding <= 1.0:\n            raise ValueError(\n                \"keep_prob_embedding must be in (0, 1].\"\n            )\n\n        if not 0.0 < keep_prob_context <= 1.0:\n            raise ValueError(\n                \"keep_prob_context must be in (0, 1].\"\n            )\n\n        # ============================================================\n        # Vocabulary dimensions\n        # ============================================================\n        if context.vocab.diagnoses is None:\n            raise ValueError(\n                \"RETAIN requires a diagnoses vocabulary.\"\n            )\n\n        if context.vocab.procedures is None:\n            raise ValueError(\n                \"RETAIN requires a procedures vocabulary.\"\n            )\n\n        if context.vocab.medications is None:\n            raise ValueError(\n                \"RETAIN requires a medications vocabulary.\"\n            )\n\n        diagnoses_vocab_size = context.vocab.diagnoses\n        procedures_vocab_size = context.vocab.procedures\n        medications_vocab_size = context.vocab.medications\n\n        self.input_vocab_size = (\n            diagnoses_vocab_size\n            + procedures_vocab_size\n        )\n\n        self.output_dim = medications_vocab_size\n        self.embedding_dim = embedding_dim\n\n        # ============================================================\n        # Regularisation configuration\n        # ============================================================\n\n        self.l2_output = l2_output\n        self.l2_embedding = l2_embedding\n        self.l2_alpha = l2_alpha\n        self.l2_beta = l2_beta\n\n        # ============================================================\n        # Visit embedding\n        #\n        # Original RETAIN:\n        #\n        #     v_i = W_emb x_i\n        #\n        # nn.Linear(..., bias=False) directly implements this.\n        # ============================================================\n\n        self.embedding = nn.Linear(\n            self.input_vocab_size,\n            embedding_dim,\n            bias=False,\n        )\n\n        self.embedding_dropout = nn.Dropout(\n            p=1.0 - keep_prob_embedding,\n        )\n\n        self.context_dropout = nn.Dropout(\n            p=1.0 - keep_prob_context,\n        )\n\n        # ============================================================\n        # Reverse-time attention networks\n        # ============================================================\n\n        self.alpha_gru = RETAINGRU(\n            input_dim=embedding_dim,\n            hidden_dim=alpha_hidden_dim,\n        )\n\n        self.beta_gru = RETAINGRU(\n            input_dim=embedding_dim,\n            hidden_dim=beta_hidden_dim,\n        )\n\n        # Visit-level scalar attention.\n        self.alpha = nn.Linear(\n            alpha_hidden_dim,\n            1,\n        )\n\n        # Feature-level vector attention.\n        self.beta = nn.Linear(\n            beta_hidden_dim,\n            embedding_dim,\n        )\n\n        # ============================================================\n        # Medication prediction\n        # ============================================================\n\n        self.output = nn.Linear(\n            embedding_dim,\n            medications_vocab_size,\n        )\n\n        # ============================================================\n        # Initialisation\n        # ============================================================\n\n        self._init_weights()\n\n    # ================================================================\n    # Initialisation\n    # ================================================================\n\n    def _init_weights(self) -> None:\n        \"\"\"\n        Initialise RETAIN parameters following the original implementation.\n        \"\"\"\n\n        nn.init.uniform_(\n            self.embedding.weight,\n            -0.1,\n            0.1,\n        )\n\n        nn.init.uniform_(\n            self.alpha.weight,\n            -0.1,\n            0.1,\n        )\n        nn.init.zeros_(\n            self.alpha.bias,\n        )\n\n        nn.init.uniform_(\n            self.beta.weight,\n            -0.1,\n            0.1,\n        )\n        nn.init.zeros_(\n            self.beta.bias,\n        )\n\n        nn.init.uniform_(\n            self.output.weight,\n            -0.1,\n            0.1,\n        )\n        nn.init.zeros_(\n            self.output.bias,\n        )\n\n    # ================================================================\n    # Patient forward\n    # ================================================================\n\n    def _forward_patient(\n        self,\n        diagnoses: torch.Tensor,\n        procedures: torch.Tensor,\n    ) -> torch.Tensor:\n        \"\"\"\n        Perform RETAIN for one patient.\n\n        Parameters\n        ----------\n        diagnoses:\n            Multi-hot diagnosis vectors with shape:\n\n                (num_visits, diagnoses_vocab_size)\n\n        procedures:\n            Multi-hot procedure vectors with shape:\n\n                (num_visits, procedures_vocab_size)\n\n        Returns\n        -------\n        torch.Tensor\n            Raw medication logits with shape:\n\n                (1, medications_vocab_size)\n        \"\"\"\n\n        if diagnoses.ndim != 2:\n            raise ValueError(\n                \"RETAIN diagnoses input must have shape \"\n                \"(num_visits, diagnoses_vocab_size).\"\n            )\n\n        if procedures.ndim != 2:\n            raise ValueError(\n                \"RETAIN procedures input must have shape \"\n                \"(num_visits, procedures_vocab_size).\"\n            )\n\n        if diagnoses.shape[0] != procedures.shape[0]:\n            raise ValueError(\n                \"Diagnosis and procedure sequences must contain \"\n                \"the same number of visits.\"\n            )\n\n        if diagnoses.shape[0] == 0:\n            raise ValueError(\n                \"RETAIN requires at least one visit.\"\n            )\n\n        # ------------------------------------------------------------\n        # Construct original RETAIN visit vector x_i\n        # ------------------------------------------------------------\n\n        visits = torch.cat(\n            [\n                diagnoses.float(),\n                procedures.float(),\n            ],\n            dim=-1,\n        )\n\n        # ------------------------------------------------------------\n        # Step 1: visit embeddings\n        #\n        #     v_i = W_emb x_i\n        # ------------------------------------------------------------\n\n        embeddings = self.embedding(\n            visits,\n        )\n\n        embeddings = self.embedding_dropout(\n            embeddings,\n        )\n\n        # ------------------------------------------------------------\n        # Steps 2 and 3:\n        # Reverse-time RNNs generating alpha and beta\n        # ------------------------------------------------------------\n\n        reverse_embeddings = torch.flip(\n            embeddings,\n            dims=[0],\n        ).unsqueeze(1)\n\n        reverse_alpha_hidden = self.alpha_gru(\n            reverse_embeddings,\n        )\n\n        reverse_beta_hidden = self.beta_gru(\n            reverse_embeddings,\n        )\n\n        # Restore chronological visit order.\n        alpha_hidden = torch.flip(\n            reverse_alpha_hidden,\n            dims=[0],\n        ).squeeze(1)\n\n        beta_hidden = torch.flip(\n            reverse_beta_hidden,\n            dims=[0],\n        ).squeeze(1)\n\n        # ------------------------------------------------------------\n        # Alpha: visit-level attention\n        # ------------------------------------------------------------\n\n        alpha_logits = self.alpha(\n            alpha_hidden,\n        ).squeeze(-1)\n\n        alpha = torch.softmax(\n            alpha_logits,\n            dim=0,\n        )\n\n        # ------------------------------------------------------------\n        # Beta: feature-level attention\n        # ------------------------------------------------------------\n\n        beta = torch.tanh(\n            self.beta(\n                beta_hidden,\n            )\n        )\n\n        # ------------------------------------------------------------\n        # Step 4: patient context\n        #\n        # c = Σ alpha_i * beta_i ⊙ v_i\n        # ------------------------------------------------------------\n\n        patient_context = (\n            alpha.unsqueeze(-1)\n            * beta\n            * embeddings\n        ).sum(dim=0)\n\n        patient_context = self.context_dropout(\n            patient_context,\n        )\n\n        # ------------------------------------------------------------\n        # Step 5: medication prediction\n        # ------------------------------------------------------------\n\n        logits = self.output(\n            patient_context,\n        )\n\n        return logits.unsqueeze(0)\n\n    # ================================================================\n    # Forward\n    # ================================================================\n\n    def forward(\n        self,\n        batch: Any,\n    ) -> ModelOutput:\n        \"\"\"\n        Perform a RETAIN forward pass.\n\n        Expected batch inputs\n        ---------------------\n        batch.diagnoses:\n            List of tensors, one per patient:\n\n                [\n                    Tensor[T_1, diagnoses_vocab_size],\n                    Tensor[T_2, diagnoses_vocab_size],\n                    ...\n                ]\n\n        batch.procedures:\n            List of tensors, one per patient:\n\n                [\n                    Tensor[T_1, procedures_vocab_size],\n                    Tensor[T_2, procedures_vocab_size],\n                    ...\n                ]\n\n        Returns\n        -------\n        torch.Tensor\n            Raw medication logits with shape:\n\n                (batch_size, medications_vocab_size)\n        \"\"\"\n\n        if len(batch.diagnoses) != len(batch.procedures):\n            raise ValueError(\n                \"Diagnosis and procedure batches must contain \"\n                \"the same number of patients.\"\n            )\n\n        patient_logits = [\n            self._forward_patient(\n                diagnoses,\n                procedures,\n            )\n            for diagnoses, procedures in zip(\n                batch.diagnoses,\n                batch.procedures,\n            )\n        ]\n\n        return ModelOutput(\n            scores=torch.cat(\n                patient_logits,\n                dim=0,\n            )\n        )\n\n    # ================================================================\n    # Loss\n    # ================================================================\n\n    def loss(\n        self,\n        outputs: torch.Tensor,\n        targets: torch.Tensor,\n    ) -> LossOutput:\n        base_loss = super().loss(\n            outputs=outputs,\n            targets=targets,\n        )\n\n        regularisation_loss = (\n            self.l2_output * self.output.weight.square().sum()\n            + self.l2_embedding * self.embedding.weight.square().sum()\n            + self.l2_alpha * self.alpha.weight.square().sum()\n            + self.l2_beta * self.beta.weight.square().sum()\n        )\n\n        return LossOutput(\n            total=base_loss.total + regularisation_loss,\n            components={\n                **base_loss.components,\n                \"regularisation\": regularisation_loss,\n            },\n        )",
+      "filename": "/home/cararc/ehrdrec/src/ehrdrec/models/retain/retain.py",
+      "sha256": "38f698eaeffa90f8f23370bc3ca62c9f1ad46dedc49622e7df8b60afe17557ba"
+    }
+  },
+  "runs": [
+    {
+      "run_id": "run_001",
+      "seed": 42
+    },
+    {
+      "run_id": "run_002",
+      "seed": 123
+    },
+    {
+      "run_id": "run_003",
+      "seed": 456
+    }
+  ],
+  "schema_version": "1.0",
+  "software": {
+    "ehrdrec_version": "0.1.0",
+    "operating_system": "Linux-6.8.0-101-generic-x86_64-with-glibc2.39",
+    "packages": [
+      {
+        "name": "accelerate",
+        "version": "1.14.0"
+      },
+      {
+        "name": "aiohappyeyeballs",
+        "version": "2.7.1"
+      },
+      {
+        "name": "aiohttp",
+        "version": "3.14.1"
+      },
+      {
+        "name": "aiosignal",
+        "version": "1.4.0"
+      },
+      {
+        "name": "alembic",
+        "version": "1.18.4"
+      },
+      {
+        "name": "annotated-doc",
+        "version": "0.0.4"
+      },
+      {
+        "name": "annotated-types",
+        "version": "0.7.0"
+      },
+      {
+        "name": "anyio",
+        "version": "4.14.0"
+      },
+      {
+        "name": "attrs",
+        "version": "26.1.0"
+      },
+      {
+        "name": "certifi",
+        "version": "2026.6.17"
+      },
+      {
+        "name": "charset-normalizer",
+        "version": "3.4.7"
+      },
+      {
+        "name": "click",
+        "version": "8.4.1"
+      },
+      {
+        "name": "colorlog",
+        "version": "6.10.1"
+      },
+      {
+        "name": "cuda-bindings",
+        "version": "13.3.1"
+      },
+      {
+        "name": "cuda-pathfinder",
+        "version": "1.5.5"
+      },
+      {
+        "name": "cuda-toolkit",
+        "version": "13.0.2"
+      },
+      {
+        "name": "ehrdrec",
+        "version": "0.1.0"
+      },
+      {
+        "name": "einops",
+        "version": "0.8.2"
+      },
+      {
+        "name": "einx",
+        "version": "0.4.3"
+      },
+      {
+        "name": "faiss-gpu",
+        "version": "1.14.3"
+      },
+      {
+        "name": "filelock",
+        "version": "3.29.4"
+      },
+      {
+        "name": "frozendict",
+        "version": "2.4.7"
+      },
+      {
+        "name": "frozenlist",
+        "version": "1.8.0"
+      },
+      {
+        "name": "fsspec",
+        "version": "2026.6.0"
+      },
+      {
+        "name": "gitdb",
+        "version": "4.0.12"
+      },
+      {
+        "name": "GitPython",
+        "version": "3.1.50"
+      },
+      {
+        "name": "greenlet",
+        "version": "3.5.1"
+      },
+      {
+        "name": "h11",
+        "version": "0.16.0"
+      },
+      {
+        "name": "hf-xet",
+        "version": "1.5.1"
+      },
+      {
+        "name": "httpcore",
+        "version": "1.0.9"
+      },
+      {
+        "name": "httpx",
+        "version": "0.28.1"
+      },
+      {
+        "name": "huggingface_hub",
+        "version": "1.20.1"
+      },
+      {
+        "name": "idna",
+        "version": "3.18"
+      },
+      {
+        "name": "info-nce-pytorch",
+        "version": "0.1.4"
+      },
+      {
+        "name": "iniconfig",
+        "version": "2.3.0"
+      },
+      {
+        "name": "Jinja2",
+        "version": "3.1.6"
+      },
+      {
+        "name": "joblib",
+        "version": "1.5.3"
+      },
+      {
+        "name": "loguru",
+        "version": "0.7.3"
+      },
+      {
+        "name": "Mako",
+        "version": "1.3.12"
+      },
+      {
+        "name": "markdown-it-py",
+        "version": "4.2.0"
+      },
+      {
+        "name": "MarkupSafe",
+        "version": "3.0.3"
+      },
+      {
+        "name": "mdurl",
+        "version": "0.1.2"
+      },
+      {
+        "name": "mpmath",
+        "version": "1.3.0"
+      },
+      {
+        "name": "multidict",
+        "version": "6.7.1"
+      },
+      {
+        "name": "narwhals",
+        "version": "2.22.1"
+      },
+      {
+        "name": "networkx",
+        "version": "3.6.1"
+      },
+      {
+        "name": "numpy",
+        "version": "2.4.6"
+      },
+      {
+        "name": "nvidia-cublas",
+        "version": "13.1.0.3"
+      },
+      {
+        "name": "nvidia-cublas-cu12",
+        "version": "12.9.2.10"
+      },
+      {
+        "name": "nvidia-cuda-cupti",
+        "version": "13.0.85"
+      },
+      {
+        "name": "nvidia-cuda-nvrtc",
+        "version": "13.0.88"
+      },
+      {
+        "name": "nvidia-cuda-nvrtc-cu12",
+        "version": "12.9.86"
+      },
+      {
+        "name": "nvidia-cuda-runtime",
+        "version": "13.0.96"
+      },
+      {
+        "name": "nvidia-cuda-runtime-cu12",
+        "version": "12.9.79"
+      },
+      {
+        "name": "nvidia-cudnn-cu13",
+        "version": "9.19.0.56"
+      },
+      {
+        "name": "nvidia-cufft",
+        "version": "12.0.0.61"
+      },
+      {
+        "name": "nvidia-cufile",
+        "version": "1.15.1.6"
+      },
+      {
+        "name": "nvidia-curand",
+        "version": "10.4.0.35"
+      },
+      {
+        "name": "nvidia-curand-cu12",
+        "version": "10.3.10.19"
+      },
+      {
+        "name": "nvidia-cusolver",
+        "version": "12.0.4.66"
+      },
+      {
+        "name": "nvidia-cusparse",
+        "version": "12.6.3.3"
+      },
+      {
+        "name": "nvidia-cusparselt-cu13",
+        "version": "0.8.0"
+      },
+      {
+        "name": "nvidia-nccl-cu13",
+        "version": "2.28.9"
+      },
+      {
+        "name": "nvidia-nvjitlink",
+        "version": "13.0.88"
+      },
+      {
+        "name": "nvidia-nvshmem-cu13",
+        "version": "3.4.5"
+      },
+      {
+        "name": "nvidia-nvtx",
+        "version": "13.0.85"
+      },
+      {
+        "name": "optuna",
+        "version": "4.9.0"
+      },
+      {
+        "name": "packaging",
+        "version": "26.2"
+      },
+      {
+        "name": "pillow",
+        "version": "12.2.0"
+      },
+      {
+        "name": "platformdirs",
+        "version": "4.10.0"
+      },
+      {
+        "name": "pluggy",
+        "version": "1.6.0"
+      },
+      {
+        "name": "polars",
+        "version": "1.41.2"
+      },
+      {
+        "name": "polars-runtime-32",
+        "version": "1.41.2"
+      },
+      {
+        "name": "propcache",
+        "version": "0.5.2"
+      },
+      {
+        "name": "protobuf",
+        "version": "7.35.1"
+      },
+      {
+        "name": "psutil",
+        "version": "7.2.2"
+      },
+      {
+        "name": "pydantic",
+        "version": "2.13.4"
+      },
+      {
+        "name": "pydantic_core",
+        "version": "2.46.4"
+      },
+      {
+        "name": "Pygments",
+        "version": "2.20.0"
+      },
+      {
+        "name": "pyparsing",
+        "version": "3.3.2"
+      },
+      {
+        "name": "pytest",
+        "version": "9.1.0"
+      },
+      {
+        "name": "PyYAML",
+        "version": "6.0.3"
+      },
+      {
+        "name": "regex",
+        "version": "2026.5.9"
+      },
+      {
+        "name": "requests",
+        "version": "2.34.2"
+      },
+      {
+        "name": "rich",
+        "version": "15.0.0"
+      },
+      {
+        "name": "safetensors",
+        "version": "0.8.0"
+      },
+      {
+        "name": "scikit-learn",
+        "version": "1.9.0"
+      },
+      {
+        "name": "scipy",
+        "version": "1.18.0"
+      },
+      {
+        "name": "sentence-transformers",
+        "version": "5.6.0"
+      },
+      {
+        "name": "sentry-sdk",
+        "version": "2.64.0"
+      },
+      {
+        "name": "setuptools",
+        "version": "81.0.0"
+      },
+      {
+        "name": "shellingham",
+        "version": "1.5.4"
+      },
+      {
+        "name": "smmap",
+        "version": "5.0.3"
+      },
+      {
+        "name": "SQLAlchemy",
+        "version": "2.0.51"
+      },
+      {
+        "name": "sympy",
+        "version": "1.14.0"
+      },
+      {
+        "name": "threadpoolctl",
+        "version": "3.6.0"
+      },
+      {
+        "name": "tokenizers",
+        "version": "0.22.2"
+      },
+      {
+        "name": "torch",
+        "version": "2.11.0"
+      },
+      {
+        "name": "torch-einops-utils",
+        "version": "0.1.5"
+      },
+      {
+        "name": "torch-geometric",
+        "version": "2.8.0"
+      },
+      {
+        "name": "torchtyping",
+        "version": "0.1.5"
+      },
+      {
+        "name": "tqdm",
+        "version": "4.68.2"
+      },
+      {
+        "name": "transformers",
+        "version": "5.12.1"
+      },
+      {
+        "name": "triton",
+        "version": "3.6.0"
+      },
+      {
+        "name": "typeguard",
+        "version": "2.13.3"
+      },
+      {
+        "name": "typer",
+        "version": "0.25.1"
+      },
+      {
+        "name": "typing-inspection",
+        "version": "0.4.2"
+      },
+      {
+        "name": "typing_extensions",
+        "version": "4.15.0"
+      },
+      {
+        "name": "urllib3",
+        "version": "2.7.0"
+      },
+      {
+        "name": "wandb",
+        "version": "0.28.0"
+      },
+      {
+        "name": "x-transformers",
+        "version": "2.23.2"
+      },
+      {
+        "name": "xxhash",
+        "version": "3.8.1"
+      },
+      {
+        "name": "yarl",
+        "version": "1.24.2"
+      }
+    ],
+    "python_version": "3.13.9"
+  },
+  "started_at": "2026-08-21T07:41:59.361896+00:00",
+  "task": {
+    "fingerprint": "3ba951ad34b5be0fd029b9da6ba1a0f16c0802f9019a561ed0a7950054c7173a",
+    "name": "MedicationSetRecommendationTask",
+    "settings": {
+      "atc_level": 3,
+      "mimic3_path": "/home/cararc/data/mimic-iii-1.4",
+      "ndc_atc_mapping_file": "data/mappings/ndc_atc_mapping.sqlite",
+      "split_type": 1
+    },
+    "version": "1.0"
+  }
+}

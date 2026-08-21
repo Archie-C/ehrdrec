@@ -1,0 +1,85 @@
+{
+  "experiment_id": "exp_20260821T074159361896Z_c7a8e51f",
+  "model_name": "RETAIN",
+  "runs": {
+    "run_001": {
+      "error": null,
+      "metrics": {
+        "test": {
+          "f1": 0.4281691610813141,
+          "jaccard": 0.2833569645881653,
+          "lrap": 0.7340186238288879,
+          "prauc_samples": 0.7340187523306102
+        },
+        "validation": {
+          "f1": 0.44229838252067566,
+          "jaccard": 0.296556293964386,
+          "lrap": 0.7272464632987976,
+          "prauc_samples": 0.7272463967242226
+        }
+      },
+      "run_time": {
+        "testing": 5.911804726347327,
+        "total": 300.837633498013,
+        "training": 242.8546639084816,
+        "validation": 50.78566651977599
+      },
+      "seed": 42,
+      "selected_epoch": 4,
+      "status": "completed"
+    },
+    "run_002": {
+      "error": null,
+      "metrics": {
+        "test": {
+          "f1": 0.4333048164844513,
+          "jaccard": 0.28750330209732056,
+          "lrap": 0.7355719804763794,
+          "prauc_samples": 0.735571836428487
+        },
+        "validation": {
+          "f1": 0.4466359317302704,
+          "jaccard": 0.3001069724559784,
+          "lrap": 0.7285037040710449,
+          "prauc_samples": 0.7285035012961348
+        }
+      },
+      "run_time": {
+        "testing": 5.9661333076655865,
+        "total": 290.47048137150705,
+        "training": 232.9331509936601,
+        "validation": 51.41643640957773
+      },
+      "seed": 123,
+      "selected_epoch": 9,
+      "status": "completed"
+    },
+    "run_003": {
+      "error": null,
+      "metrics": {
+        "test": {
+          "f1": 0.4281691610813141,
+          "jaccard": 0.2833569645881653,
+          "lrap": 0.7347833514213562,
+          "prauc_samples": 0.7347831204850338
+        },
+        "validation": {
+          "f1": 0.4423205256462097,
+          "jaccard": 0.29657161235809326,
+          "lrap": 0.7278251647949219,
+          "prauc_samples": 0.7278245739989401
+        }
+      },
+      "run_time": {
+        "testing": 5.812763329595327,
+        "total": 287.1414545532316,
+        "training": 230.58823505043983,
+        "validation": 50.615391593426466
+      },
+      "seed": 456,
+      "selected_epoch": 7,
+      "status": "completed"
+    }
+  },
+  "task": "MedicationSetRecommendationTask"
+}

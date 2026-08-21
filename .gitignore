@@ -219,3 +219,5 @@ foursdrug_checkpoints/
 checkpoints/
 
 .wandb/*
+
+.artifacts/*

@@ -118,12 +118,11 @@ class MaskLinear(nn.Module):
         )
 
 class MolecularGraphNeuralNetwork(nn.Module):
-    def __init__(self, N_fingerprint, dim, layer_hidden, device):
+    def __init__(self, n_fingerprints, dim, layer_hidden):
         super(MolecularGraphNeuralNetwork, self).__init__()
-        self.device = device
-        self.embed_fingerprint = nn.Embedding(N_fingerprint, dim).to(self.device)
+        self.embed_fingerprint = nn.Embedding(n_fingerprints, dim)
         self.W_fingerprint = nn.ModuleList(
-            [nn.Linear(dim, dim).to(self.device) for _ in range(layer_hidden)]
+            [nn.Linear(dim, dim) for _ in range(layer_hidden)]
         )
         self.layer_hidden = layer_hidden
 
@@ -136,7 +135,8 @@ class MolecularGraphNeuralNetwork(nn.Module):
         """
         shapes = [m.shape for m in matrices]
         M, N = sum([s[0] for s in shapes]), sum([s[1] for s in shapes])
-        zeros = torch.FloatTensor(np.zeros((M, N))).to(self.device)
+        device = matrices[0].device
+        zeros = torch.zeros((M, N), dtype=torch.float32, device=device)
         pad_matrices = pad_value + zeros
         i, j = 0, 0
         for k, matrix in enumerate(matrices):
@@ -162,6 +162,13 @@ class MolecularGraphNeuralNetwork(nn.Module):
 
         """Cat or pad each input data for batch processing."""
         fingerprints, adjacencies, molecular_sizes = inputs
+        device = self.embed_fingerprint.weight.device
+        if not fingerprints:
+            return self.embed_fingerprint.weight.new_empty(
+                (0, self.embed_fingerprint.embedding_dim)
+            )
+        fingerprints = [item.to(device) for item in fingerprints]
+        adjacencies = [item.to(device) for item in adjacencies]
         fingerprints = torch.cat(fingerprints)
         adjacencies = self.pad(adjacencies, 0)
 

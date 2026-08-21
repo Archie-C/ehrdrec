@@ -52,14 +52,14 @@ class SafeDrug(TorchEHRDrecModel):
         procedures_vocab_size = context.vocab.procedures
         medications_vocab_size = context.vocab.medications
 
-        molecular_graphs = context.resources.molecular_graphs
+        molecular_graphs = context.get_resource("molecular_graphs")
         average_projection = (
-            context.resources.medication_molecule_projection
+            context.get_resource("medication_molecule_projection")
         )
         drug_fragment_mask = (
-            context.resources.medication_substructure_matrix
+            context.get_resource("medication_substructure_matrix")
         )
-        ddi_adj = context.resources.ddi_graph
+        ddi_adj = context.get_resource("ddi_graph")
 
         n_fingerprints = molecular_graphs.n_fingerprints
         mpnn_set = molecular_graphs.graphs
@@ -121,7 +121,11 @@ class SafeDrug(TorchEHRDrecModel):
         # Molecular graph component
         # ------------------------------------------------------------
 
-        self.mpnn_molecule_set = list(zip(*mpnn_set))
+        self.mpnn_molecule_set = (
+            tuple(zip(*mpnn_set))
+            if mpnn_set
+            else ((), (), ())
+        )
 
         self.mpnn = MolecularGraphNeuralNetwork(
             n_fingerprints=n_fingerprints,

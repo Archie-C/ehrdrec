@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 import logging
+from typing import Any
 
 import torch
 
@@ -13,9 +14,11 @@ from ehrdrec.requirements import (
     Feature,
     InputRequirement,
     InputStructure,
+    ModelRequirement,
     TaskRequirement,
 )
 from ehrdrec.utils import NDCATCMapper, Vocab
+from .molecular import MOLECULAR_REQUIREMENTS, build_molecular_resources
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,7 @@ class MedicationSplitType(Enum):
 @dataclass
 class MedicationSetRecommendationTaskOutput(TaskOutput):
     vocab: dict[str, Vocab]
+    resources: dict[str, Any] = field(default_factory=dict)
 
 
 class MedicationSetRecommendationTask(Task):
@@ -56,12 +60,14 @@ class MedicationSetRecommendationTask(Task):
         settings = dict(self.config)
         settings.setdefault("atc_level", 5)
         settings.setdefault("split_type", MedicationSplitType.LAST_VISIT)
+        settings.setdefault("molecular_wl_radius", 1)
         return settings
 
     def preprocess(
         self,
         raw_frames: dict[str, pl.LazyFrame],
         input_requirements: set[InputRequirement],
+        model_requirements: set[ModelRequirement] | None = None,
     ) -> MedicationSetRecommendationTaskOutput:
 
         logger.info(
@@ -70,6 +76,7 @@ class MedicationSetRecommendationTask(Task):
         )
 
         atc_level = self.config.get("atc_level", 5)
+        model_requirements = model_requirements or set()
 
         split_type = self.config.get(
             "split_type",
@@ -122,6 +129,22 @@ class MedicationSetRecommendationTask(Task):
             medications_frame=medications_frame,
         )
 
+        resources: dict[str, Any] = {}
+        if model_requirements & MOLECULAR_REQUIREMENTS:
+            mapping_path = self.config.get("atc_molecule_mapping_file")
+            if mapping_path is None:
+                raise ValueError(
+                    "Task config 'atc_molecule_mapping_file' is required "
+                    "when molecular model resources are requested."
+                )
+            resources = build_molecular_resources(
+                medication_vocab=vocab["medications"],
+                model_requirements=model_requirements,
+                mapping_path=mapping_path,
+                atc_level=atc_level,
+                wl_radius=self.config.get("molecular_wl_radius", 1),
+            )
+
         # ============================================================
         # Construct leakage-safe examples and split
         # ============================================================
@@ -142,6 +165,7 @@ class MedicationSetRecommendationTask(Task):
             validation=validation,
             test=test,
             vocab=vocab,
+            resources=resources,
         )
     
     def loss(

@@ -118,6 +118,7 @@ class Task(ABC):
     """
 
     _requirements: set[TaskRequirement] = set()
+    version: str = "1.0"
 
     def __init__(
         self,
@@ -128,6 +129,9 @@ class Task(ABC):
     @property
     def requirements(self) -> set[TaskRequirement]:
         return set(self._requirements)
+
+    def get_resolved_config(self) -> dict[str, Any]:
+        return dict(self.config)
 
     def get_data_request(
         self,

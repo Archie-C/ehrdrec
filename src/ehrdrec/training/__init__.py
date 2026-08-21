@@ -1,3 +1,13 @@
-from .trainer import Trainer, TrainerConfig
+from .trainer import (
+    EpochResult,
+    Trainer,
+    TrainerConfig,
+    TrainingResult,
+)
 
-__all__ = ["Trainer", "TrainerConfig"]
+__all__ = [
+    "EpochResult",
+    "Trainer",
+    "TrainerConfig",
+    "TrainingResult",
+]

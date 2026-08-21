@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+import logging
 
 import torch
 
@@ -15,6 +16,9 @@ from ehrdrec.requirements import (
     TaskRequirement,
 )
 from ehrdrec.utils import NDCATCMapper, Vocab
+
+
+logger = logging.getLogger(__name__)
 
 
 class MedicationSplitType(Enum):
@@ -48,11 +52,22 @@ class MedicationSetRecommendationTask(Task):
         TaskRequirement.VISIT_TIMES,
     }
 
+    def get_resolved_config(self) -> dict[str, object]:
+        settings = dict(self.config)
+        settings.setdefault("atc_level", 5)
+        settings.setdefault("split_type", MedicationSplitType.LAST_VISIT)
+        return settings
+
     def preprocess(
         self,
         raw_frames: dict[str, pl.LazyFrame],
         input_requirements: set[InputRequirement],
     ) -> MedicationSetRecommendationTaskOutput:
+
+        logger.info(
+            "Medication recommendation preprocessing started: settings=%s",
+            self.get_resolved_config(),
+        )
 
         atc_level = self.config.get("atc_level", 5)
 
@@ -119,6 +134,8 @@ class MedicationSetRecommendationTask(Task):
             input_requirements=input_requirements,
             split_type=split_type,
         )
+
+        logger.info("Medication recommendation preprocessing completed")
 
         return MedicationSetRecommendationTaskOutput(
             train=train,

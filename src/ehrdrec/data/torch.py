@@ -54,10 +54,21 @@ class EHRDataset(Dataset):
         index: int,
     ) -> dict[str, Any]:
 
-        return self.frame.row(
+        row = self.frame.row(
             index,
             named=True,
         )
+
+        if "EXAMPLE_ID" not in row:
+            if "SUBJECT_ID" in row and "HADM_ID" in row:
+                row["EXAMPLE_ID"] = (
+                    f"{row['SUBJECT_ID']}:{row['HADM_ID']}"
+                )
+            else:
+                # Stable for a fixed, deterministically ordered processed split.
+                row["EXAMPLE_ID"] = f"example_{index:08d}"
+
+        return row
 
 
 @dataclass
@@ -205,6 +216,7 @@ class EHRBatchCollator:
         metadata = {}
 
         for name in (
+            "EXAMPLE_ID",
             "SUBJECT_ID",
             "HADM_ID",
             "ADMITTIME",

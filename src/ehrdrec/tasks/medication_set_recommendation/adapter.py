@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import polars as pl
@@ -22,6 +23,9 @@ from ehrdrec.utils import (
     ReservedId,
     Vocab,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class MedicationSetRecommendationAdapter:
@@ -105,6 +109,7 @@ class MedicationSetRecommendationAdapter:
         Dense multi-hot vectors are generated later by the collator.
         """
 
+        logger.info("Medication recommendation adaptation started")
         fields = self._build_field_specs()
 
         target = BatchTargetSpec(
@@ -115,7 +120,7 @@ class MedicationSetRecommendationAdapter:
             ).vocab_size,
         )
 
-        return AdapterOutput(
+        output = AdapterOutput(
             train=self.transform(
                 self.task_output.train
             ),
@@ -128,6 +133,11 @@ class MedicationSetRecommendationAdapter:
             fields=fields,
             target=target,
         )
+        logger.info(
+            "Medication recommendation adaptation completed: fields=%s",
+            sorted(fields),
+        )
+        return output
 
     def transform(
         self,

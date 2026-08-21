@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import logging
+import time
 from typing import Any
 
 import torch
@@ -10,7 +12,12 @@ from torch.utils.data import DataLoader
 
 from ehrdrec.contracts.models import LossOutput
 from ehrdrec.data.torch import EHRBatch
+from ehrdrec.evaluation import EvaluationOutput
 from ehrdrec.models.base import TorchEHRDrecModel
+from ehrdrec.evaluation.metrics import Metric
+
+
+logger = logging.getLogger(__name__)
 
 
 # =====================================================================
@@ -28,11 +35,18 @@ class EpochResult:
     validation_loss: float | None = None
     validation_components: dict[str, float] | None = None
 
+    metrics: dict[str, float] | None = None
+
 
 @dataclass(frozen=True)
 class TrainingResult:
     epochs: list[EpochResult]
     total_steps: int
+    best_epoch: int | None = None
+    selected_validation_loss: float | None = None
+    selected_validation_metrics: dict[str, float] | None = None
+    training_time: float = 0.0
+    validation_time: float = 0.0
 
 
 # =====================================================================
@@ -55,6 +69,8 @@ class TrainerConfig:
     gradient_clip_value: float | None = None
 
     non_blocking_device_transfer: bool = True
+    selection_metric: str | None = None
+    selection_mode: str = "min"
 
     def __post_init__(self) -> None:
         if self.epochs <= 0:
@@ -87,6 +103,11 @@ class TrainerConfig:
                 "gradient_clip_value may be configured."
             )
 
+        if self.selection_mode not in {"min", "max"}:
+            raise ValueError(
+                "selection_mode must be either 'min' or 'max'."
+            )
+
 
 # =====================================================================
 # Trainer
@@ -103,7 +124,7 @@ class Trainer:
         - the dataset
         - model architecture
         - prediction semantics
-        - evaluation metrics
+        - metric implementation details
         - model-specific objectives
 
     Models receive an EHRBatch and are responsible for their forward
@@ -115,11 +136,13 @@ class Trainer:
     def __init__(
         self,
         config: TrainerConfig,
+        metrics: list[Metric] | None = None,
     ) -> None:
         self.config = config
         self.device = self._resolve_device(
             config.device
         )
+        self.metrics = metrics or []
 
     # =================================================================
     # Public API
@@ -134,14 +157,28 @@ class Trainer:
     ) -> TrainingResult:
 
         model.to(self.device)
+        logger.info(
+            "Training started: epochs=%d device=%s",
+            self.config.epochs,
+            self.device,
+        )
 
         epoch_results: list[EpochResult] = []
         total_steps = 0
+        training_time = 0.0
+        validation_time = 0.0
+
+        best_score: float | None = None
+        best_state_dict: dict[str, Any] | None = None
+        best_epoch: int | None = None
+        selected_validation_loss: float | None = None
+        selected_validation_metrics: dict[str, float] | None = None
 
         for epoch in range(
             1,
             self.config.epochs + 1,
         ):
+            train_started = time.perf_counter()
             (
                 train_loss,
                 train_components,
@@ -151,34 +188,131 @@ class Trainer:
                 loader=train_loader,
                 optimizer=optimizer,
             )
-
+            training_time += time.perf_counter() - train_started
             total_steps += epoch_steps
 
             validation_loss = None
             validation_components = None
+            validation_metrics = None
 
             if validation_loader is not None:
+                validation_started = time.perf_counter()
                 (
                     validation_loss,
                     validation_components,
+                    evaluation_output,
                 ) = self._validate_epoch(
                     model=model,
                     loader=validation_loader,
                 )
 
-            epoch_results.append(
-                EpochResult(
-                    epoch=epoch,
-                    train_loss=train_loss,
-                    train_components=train_components,
-                    validation_loss=validation_loss,
-                    validation_components=validation_components,
+                validation_metrics = {
+                    name: value
+                    for metric in self.metrics
+                    for name, value in metric.compute(
+                        evaluation_output
+                    ).items()
+                }
+                validation_time += (
+                    time.perf_counter() - validation_started
                 )
+
+            epoch_result = EpochResult(
+                epoch=epoch,
+                train_loss=train_loss,
+                train_components=train_components,
+                validation_loss=validation_loss,
+                validation_components=validation_components,
+                metrics=validation_metrics,
             )
+            epoch_results.append(epoch_result)
+
+            logger.info(
+                "Epoch %d/%d complete: train_loss=%.6f "
+                "validation_loss=%s validation_metrics=%s",
+                epoch,
+                self.config.epochs,
+                train_loss,
+                (
+                    f"{validation_loss:.6f}"
+                    if validation_loss is not None
+                    else "n/a"
+                ),
+                validation_metrics or {},
+            )
+
+            if validation_loss is not None:
+                if self.config.selection_metric is None:
+                    selection_score = validation_loss
+                else:
+                    if (
+                        validation_metrics is None
+                        or self.config.selection_metric
+                        not in validation_metrics
+                    ):
+                        raise ValueError(
+                            "Configured selection_metric "
+                            f"{self.config.selection_metric!r} was not "
+                            "produced during validation."
+                        )
+                    selection_score = validation_metrics[
+                        self.config.selection_metric
+                    ]
+
+                improved = (
+                    best_score is None
+                    or (
+                        self.config.selection_mode == "min"
+                        and selection_score < best_score
+                    )
+                    or (
+                        self.config.selection_mode == "max"
+                        and selection_score > best_score
+                    )
+                )
+
+                if improved:
+                    best_score = selection_score
+                    best_epoch = epoch
+                    selected_validation_loss = validation_loss
+                    selected_validation_metrics = dict(
+                        validation_metrics or {}
+                    )
+                    best_state_dict = {
+                        name: value.detach().cpu().clone()
+                        for name, value in model.state_dict().items()
+                    }
+                    logger.info(
+                        "Selected checkpoint updated: epoch=%d "
+                        "criterion=%s value=%.6f",
+                        epoch,
+                        self.config.selection_metric or "validation_loss",
+                        selection_score,
+                    )
+
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+            logger.info(
+                "Restored selected validation checkpoint from epoch %d",
+                best_epoch,
+            )
+
+        logger.info(
+            "Training completed: steps=%d training_seconds=%.3f "
+            "validation_seconds=%.3f",
+            total_steps,
+            training_time,
+            validation_time,
+        )
 
         return TrainingResult(
             epochs=epoch_results,
             total_steps=total_steps,
+            best_epoch=best_epoch,
+            selected_validation_loss=selected_validation_loss,
+            selected_validation_metrics=selected_validation_metrics,
+            training_time=training_time,
+            validation_time=validation_time,
         )
 
     # =================================================================
@@ -273,14 +407,17 @@ class Trainer:
     ) -> tuple[
         float,
         dict[str, float],
+        EvaluationOutput,
     ]:
         model.eval()
 
         total_loss = 0.0
         component_totals: dict[str, float] = defaultdict(float)
 
+        scores: list[torch.Tensor] = []
+        targets: list[torch.Tensor] = []
+
         total_examples = 0
-        total_steps = 0
 
         for batch in loader:
             batch = self._prepare_batch(
@@ -315,13 +452,24 @@ class Trainer:
                     * batch_size
                 )
 
-            total_examples += batch_size
-            total_steps += 1
+            scores.append(
+                model_output.scores.detach().cpu()
+            )
+            targets.append(
+                batch.targets.detach().cpu()
+            )
 
-        if total_steps == 0:
+            total_examples += batch_size
+
+        if total_examples == 0:
             raise RuntimeError(
                 "Validation DataLoader produced no batches."
             )
+
+        evaluation_output = EvaluationOutput(
+            scores=torch.cat(scores, dim=0),
+            targets=torch.cat(targets, dim=0),
+        )
 
         return (
             total_loss / total_examples,
@@ -329,6 +477,7 @@ class Trainer:
                 name: value / total_examples
                 for name, value in component_totals.items()
             },
+            evaluation_output,
         )
 
     # =================================================================

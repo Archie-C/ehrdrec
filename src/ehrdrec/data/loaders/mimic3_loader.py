@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 from pathlib import Path
 
 import polars as pl
@@ -10,6 +11,9 @@ from ehrdrec.requirements import (
     DataRequest,
     DataRequirement,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class MIMIC3Files(Enum):
@@ -162,13 +166,18 @@ class MIMIC3Loader:
         path = Path(path)
 
         resolved = self._resolve_request(request)
+        logger.info(
+            "MIMIC-III data loading started: path=%s files=%s",
+            path,
+            [file.value for file in sorted(resolved, key=lambda item: item.value)],
+        )
 
         self._validate(
             path=path,
             required_files=set(resolved),
         )
 
-        return {
+        frames = {
             file.name: self._load_frame(
                 path=path,
                 file=file,
@@ -176,6 +185,11 @@ class MIMIC3Loader:
             )
             for file, columns in resolved.items()
         }
+        logger.info(
+            "MIMIC-III data loading completed: %d lazy frames prepared",
+            len(frames),
+        )
+        return frames
 
     def _resolve_request(
         self,

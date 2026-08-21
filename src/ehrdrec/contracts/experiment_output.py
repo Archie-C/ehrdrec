@@ -21,6 +21,8 @@ class RunResults:
     metrics: dict[str, dict[str, float]]
     run_time: RunTimes
     status: RunStatus = RunStatus.COMPLETED
+    selected_epoch: int | None = None
+    error: str | None = None
 
 @dataclass
 class ExperimentResults:

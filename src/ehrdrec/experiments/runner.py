@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 import logging
@@ -48,10 +49,12 @@ from ehrdrec.experiments.reproducibility import (
     set_seed,
 )
 from ehrdrec.models.base import TorchEHRDrecModel
+from ehrdrec.requirements import InputRequirement, ModelRequirement
 from ehrdrec.tasks import (
     MedicationSetRecommendationAdapter,
     MedicationSetRecommendationTask,
     Task,
+    TaskOutput,
 )
 from ehrdrec.training.trainer import Trainer, TrainerConfig, TrainingResult
 
@@ -64,6 +67,16 @@ OptimizerFactory = Callable[
     Optimizer,
 ]
 AdapterFactory = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class PreparedTaskData:
+    """Task output prepared once and reusable by compatible experiments."""
+
+    task_output: TaskOutput
+    sources: tuple[str, ...]
+    input_requirements: frozenset[InputRequirement]
+    model_requirements: frozenset[ModelRequirement]
 
 
 class ExperimentRunner:
@@ -110,6 +123,8 @@ class ExperimentRunner:
         dataset_version: str | None = "1.4",
         experiment_id: str | None = None,
         model_config_source: str | Path | None = None,
+        prepared_task_data: PreparedTaskData | None = None,
+        output_root: str | Path | None = None,
     ) -> Experiment:
         seeds = [int(seed) for seed in seeds]
         if not seeds:
@@ -127,7 +142,10 @@ class ExperimentRunner:
             task_settings=task_settings,
         )
 
-        output_dir = self.output_root / experiment_id
+        run_output_root = (
+            Path(output_root) if output_root is not None else self.output_root
+        )
+        output_dir = run_output_root / experiment_id
         output_dir.mkdir(parents=True, exist_ok=False)
         (output_dir / "logs").mkdir()
         (output_dir / "models").mkdir()
@@ -162,6 +180,7 @@ class ExperimentRunner:
                     dataset_path=dataset_path,
                     dataset_name=dataset_name,
                     dataset_version=dataset_version,
+                    prepared_task_data=prepared_task_data,
                 )
             except BaseException:
                 logger.exception(
@@ -192,43 +211,36 @@ class ExperimentRunner:
         dataset_path: str | Path | None,
         dataset_name: str,
         dataset_version: str | None,
+        prepared_task_data: PreparedTaskData | None,
     ) -> Experiment:
         input_requirements = model.get_inputs()
         model_requirements = model.get_requirements()
 
-        logger.info("Creating data request")
-        data_request = task.get_data_request(
-            input_requirements=input_requirements,
-            model_requirements=model_requirements,
-        )
-
-        data_loader = loader or MIMIC3Loader()
-        if dataset_path is None:
-            dataset_path = task.config.get("mimic3_path")
-        if dataset_path is None:
-            raise ValueError(
-                "dataset_path is required when it is not present as "
-                "task.config['mimic3_path']."
+        if prepared_task_data is None:
+            prepared_task_data = self.prepare_task_data(
+                task=task,
+                input_requirements=input_requirements,
+                model_requirements=model_requirements,
+                loader=loader,
+                dataset_path=dataset_path,
             )
+        else:
+            missing_inputs = input_requirements.difference(
+                prepared_task_data.input_requirements
+            )
+            missing_model_requirements = model_requirements.difference(
+                prepared_task_data.model_requirements
+            )
+            if missing_inputs or missing_model_requirements:
+                raise ValueError(
+                    "Prepared task data does not satisfy this model: "
+                    f"missing_inputs={sorted(map(str, missing_inputs))}, "
+                    "missing_model_requirements="
+                    f"{sorted(map(str, missing_model_requirements))}."
+                )
+            logger.info("Using shared prepared task data")
 
-        logger.info("Data loading started")
-        raw_frames = data_loader.load(
-            path=dataset_path,
-            request=data_request,
-        )
-        logger.info("Data loading completed")
-
-        logger.info("Task preprocessing started")
-        preprocess_kwargs = {
-            "raw_frames": raw_frames,
-            "input_requirements": input_requirements,
-        }
-        if "model_requirements" in inspect.signature(
-            task.preprocess
-        ).parameters:
-            preprocess_kwargs["model_requirements"] = model_requirements
-        task_output = task.preprocess(**preprocess_kwargs)
-        logger.info("Task preprocessing completed")
+        task_output = prepared_task_data.task_output
 
         adapter_type = adapter_factory or self._default_adapter(task)
         logger.info("Adapter started: %s", self._name(adapter_type))
@@ -255,7 +267,7 @@ class ExperimentRunner:
             datasets=datasets,
             name=dataset_name,
             version=dataset_version,
-            sources=list(raw_frames),
+            sources=list(prepared_task_data.sources),
         )
         logger.info(
             "Cohort statistics: patients=%s visits=%s examples=%s",
@@ -361,6 +373,58 @@ class ExperimentRunner:
             len(run_results),
         )
         return experiment
+
+    def prepare_task_data(
+        self,
+        *,
+        task: Task,
+        input_requirements: set[InputRequirement],
+        model_requirements: set[ModelRequirement],
+        loader: Any | None = None,
+        dataset_path: str | Path | None = None,
+    ) -> PreparedTaskData:
+        """Load and preprocess task data for one or more experiments."""
+
+        logger.info("Creating data request")
+        data_request = task.get_data_request(
+            input_requirements=input_requirements,
+            model_requirements=model_requirements,
+        )
+
+        data_loader = loader or MIMIC3Loader()
+        if dataset_path is None:
+            dataset_path = task.config.get("mimic3_path")
+        if dataset_path is None:
+            raise ValueError(
+                "dataset_path is required when it is not present as "
+                "task.config['mimic3_path']."
+            )
+
+        logger.info("Data loading started")
+        raw_frames = data_loader.load(
+            path=dataset_path,
+            request=data_request,
+        )
+        logger.info("Data loading completed")
+
+        logger.info("Task preprocessing started")
+        preprocess_kwargs = {
+            "raw_frames": raw_frames,
+            "input_requirements": input_requirements,
+        }
+        if "model_requirements" in inspect.signature(
+            task.preprocess
+        ).parameters:
+            preprocess_kwargs["model_requirements"] = model_requirements
+        task_output = task.preprocess(**preprocess_kwargs)
+        logger.info("Task preprocessing completed")
+
+        return PreparedTaskData(
+            task_output=task_output,
+            sources=tuple(sorted(raw_frames)),
+            input_requirements=frozenset(input_requirements),
+            model_requirements=frozenset(model_requirements),
+        )
 
     def _run_once(
         self,

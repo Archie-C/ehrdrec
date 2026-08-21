@@ -11,10 +11,11 @@ from ehrdrec.experiments.reproducibility import (
     capture_software_environment,
     set_seed,
 )
-from ehrdrec.experiments.runner import ExperimentRunner
+from ehrdrec.experiments.runner import ExperimentRunner, PreparedTaskData
 
 __all__ = [
     "ExperimentRunner",
+    "PreparedTaskData",
     "capture_hardware_information",
     "capture_software_environment",
     "set_seed",
